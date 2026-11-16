@@ -2,8 +2,10 @@ package io.kestra.jetbrains.actions
 
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
@@ -38,14 +40,19 @@ class SignInAction : DumbAwareAction() {
                 ShowSettingsUtil.getInstance().showSettingsDialog(project, KestraConfigurable::class.java)
                 return
             }
-            val dialog = SignInDialog(project, url)
+            // The password safe can be slow (OS keychain), so it is never called on the EDT.
+            val stored = ProgressManager.getInstance().runProcessWithProgressSynchronously<KestraCredential?, Exception>(
+                { KestraCredentials.get(url) }, "Reading Kestra credentials", false, project,
+            )
+            val dialog = SignInDialog(project, url, stored)
             if (!dialog.showAndGet()) {
                 return
             }
-            KestraCredentials.set(url, dialog.credential())
-            KestraSettings.fireChanged()
+            val credential = dialog.credential()
             object : Task.Backgroundable(project, "Signing in to Kestra", false) {
                 override fun run(indicator: ProgressIndicator) {
+                    KestraCredentials.set(url, credential)
+                    KestraSettings.fireChanged()
                     try {
                         KestraApi.instance.verify()
                         KestraNotifier.info(project, "Signed in to Kestra at ${KestraApi.origin(url)}.")
@@ -62,7 +69,7 @@ class SignInAction : DumbAwareAction() {
     }
 }
 
-private class SignInDialog(project: Project?, private val url: String) : DialogWrapper(project) {
+private class SignInDialog(project: Project?, private val url: String, stored: KestraCredential?) : DialogWrapper(project) {
     private val kind = ComboBox(AuthKind.entries.toTypedArray())
     private val username = JBTextField()
     private val secret = JBPasswordField()
@@ -71,7 +78,7 @@ private class SignInDialog(project: Project?, private val url: String) : DialogW
 
     init {
         title = "Sign In to Kestra"
-        KestraCredentials.get(url)?.let {
+        stored?.let {
             kind.selectedItem = it.kind
             username.text = it.username
         }
@@ -110,11 +117,14 @@ private class SignInDialog(project: Project?, private val url: String) : DialogW
 class SignOutAction : DumbAwareAction() {
     override fun actionPerformed(e: AnActionEvent) {
         val url = KestraSettings.instance.url
-        if (url.isNotBlank()) {
-            KestraCredentials.clear(url)
-            KestraSettings.fireChanged()
+        val project = e.project
+        ApplicationManager.getApplication().executeOnPooledThread {
+            if (url.isNotBlank()) {
+                KestraCredentials.clear(url)
+                KestraSettings.fireChanged()
+            }
+            KestraNotifier.info(project, "Signed out of Kestra.")
         }
-        KestraNotifier.info(e.project, "Signed out of Kestra.")
     }
 
     override fun getActionUpdateThread() = ActionUpdateThread.BGT
