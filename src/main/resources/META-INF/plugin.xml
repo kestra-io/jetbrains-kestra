@@ -25,6 +25,12 @@
 
         <externalAnnotator language="yaml" implementationClass="io.kestra.jetbrains.validation.KestraValidationAnnotator"/>
 
+        <completion.contributor language="yaml" order="first"
+                                implementationClass="io.kestra.jetbrains.completion.PebbleCompletionContributor"/>
+        <completion.confidence language="yaml" order="first"
+                               implementationClass="io.kestra.jetbrains.completion.PebbleCompletionConfidence"/>
+        <typedHandler implementation="io.kestra.jetbrains.completion.PebbleTypedHandler"/>
+
         <configurationType implementation="io.kestra.jetbrains.run.KestraRunConfigurationType"/>
         <runConfigurationProducer implementation="io.kestra.jetbrains.run.KestraRunConfigurationProducer"/>
         <runLineMarkerContributor language="yaml" implementationClass="io.kestra.jetbrains.run.KestraRunLineMarkerContributor"/>
