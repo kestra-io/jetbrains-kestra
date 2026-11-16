@@ -5,6 +5,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
 import io.kestra.jetbrains.api.KestraApiException
 import io.kestra.jetbrains.api.KestraUrls
+import io.kestra.jetbrains.api.NamespaceEntry
 import io.kestra.jetbrains.api.NamespaceFilesApi
 import io.kestra.jetbrains.namespace.NamespacePaths
 import io.kestra.jetbrains.settings.KestraSettings
@@ -54,12 +55,19 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
     }
 
     // Lists a folder from the instance. Network: background threads only.
+    // The root also holds a _flows folder: the namespace's flows as <id>.yml files, as in the VS Code extension.
     fun list(dir: KestraVirtualFile): List<KestraVirtualFile> {
-        val entries = io { api(dir).list(dir.namespace, dir.relativePath) }
-        val children = entries.filter { it.name !in HIDDEN }.sortedWith(compareBy({ !it.directory }, { it.name.lowercase() })).map { entry ->
+        val entries = if (isFlowsFolder(dir)) {
+            // Flows have no modification time to compare: they are always read again.
+            io { api(dir).flowIds(dir.namespace) }.map { NamespaceEntry("$it.yml", false, 0, 0) }
+        } else {
+            io { api(dir).list(dir.namespace, dir.relativePath) }.filter { it.name !in HIDDEN && !(dir.isRoot && it.name == FLOWS) } +
+                listOfNotNull(NamespaceEntry(FLOWS, true, 0, 0).takeIf { dir.isRoot })
+        }
+        val children = entries.sortedWith(compareBy({ !it.directory }, { it.name.lowercase() })).map { entry ->
             child(dir, entry.name, entry.directory).also {
                 // A file changed on the instance is read again, unless it has a save in flight.
-                if (it.modified != entry.modified && !NamespaceSaver.instance.isPending(it)) it.content = null
+                if ((it.modified != entry.modified || isFlowsFolder(dir)) && !NamespaceSaver.instance.isPending(it)) it.content = null
                 it.size = entry.size
                 it.modified = entry.modified
             }
@@ -69,9 +77,15 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
         return children
     }
 
-    internal fun read(file: KestraVirtualFile): ByteArray = io { api(file).read(file.namespace, file.relativePath) }
+    internal fun read(file: KestraVirtualFile): ByteArray = io {
+        if (isFlow(file)) api(file).flowSource(file.namespace, flowId(file)).toByteArray() else api(file).read(file.namespace, file.relativePath)
+    }
 
-    internal fun write(file: KestraVirtualFile, content: ByteArray) = io { api(file).write(file.namespace, file.relativePath, content) }
+    // A flow is saved through the flows API, which validates it and reports why it refuses it.
+    internal fun write(file: KestraVirtualFile, content: ByteArray) = io {
+        if (isFlow(file)) api(file).saveFlow(file.namespace, flowId(file), String(content, Charsets.UTF_8))
+        else api(file).write(file.namespace, file.relativePath, content)
+    }
 
     // Model updates once the instance accepted the change. EDT.
     fun created(parent: KestraVirtualFile, name: String, directory: Boolean): KestraVirtualFile {
@@ -106,6 +120,12 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
         firePropertyChanged(null, file, VirtualFile.PROP_NAME, oldName, newName)
     }
 
+    fun isFlowsFolder(file: KestraVirtualFile) = file.relativePath == "/$FLOWS"
+
+    fun isFlow(file: KestraVirtualFile) = !file.isDirectory && NamespacePaths.parent(file.relativePath) == "/$FLOWS"
+
+    fun flowId(file: KestraVirtualFile) = file.name.substringBeforeLast('.')
+
     private fun forget(file: KestraVirtualFile) {
         files.entries.removeIf { (key, known) -> (key == file.path || key.startsWith(file.path + "/")).also { if (it) known.valid = false } }
     }
@@ -114,7 +134,7 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
     private fun api(file: KestraVirtualFile): NamespaceFilesApi {
         val current = currentInstance()
         if (file.instance != current) {
-            throw IOException("${file.presentableUrl} belongs to ${file.instance}, but the IDE is now connected to ${current ?: "no instance"}. Open it again from the Kestra Namespaces tool window.")
+            throw IOException("${file.location} belongs to ${file.instance}, but the IDE is now connected to ${current ?: "no instance"}. Open it again from the Kestra Namespaces tool window.")
         }
         return NamespaceFilesApi()
     }
@@ -141,6 +161,7 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
 
     companion object {
         const val PROTOCOL = "kestra"
+        const val FLOWS = "_flows"
 
         // The VS Code extension refuses these too: tools would otherwise write their metadata to the namespace.
         val HIDDEN = setOf(".git", ".vscode", ".idea")

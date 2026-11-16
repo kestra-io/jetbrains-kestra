@@ -62,12 +62,13 @@ class KestraNamespacesState : BaseState() {
 class KestraNamespaces : SimplePersistentStateComponent<KestraNamespacesState>(KestraNamespacesState()) {
     val namespaces: List<String> get() = state.namespaces.toList()
 
+    // Assigning a new list is what marks the state as changed.
     fun add(namespace: String) {
-        if (namespace !in state.namespaces) state.namespaces.add(namespace).also { state.intIncrementModificationCount() }
+        if (namespace !in state.namespaces) state.namespaces = (state.namespaces + namespace).toMutableList()
     }
 
     fun remove(namespace: String) {
-        if (state.namespaces.remove(namespace)) state.intIncrementModificationCount()
+        if (namespace in state.namespaces) state.namespaces = (state.namespaces - namespace).toMutableList()
     }
 }
 
@@ -108,11 +109,16 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
             action("Open Namespace…", AllIcons.General.Add) { openNamespace() },
             action("Refresh", AllIcons.Actions.Refresh) { refresh() },
             action("New File…", AllIcons.Actions.AddFile, enabled = { targetFolder() != null }) { create(directory = false) },
-            action("New Folder…", AllIcons.Actions.NewFolder, enabled = { targetFolder() != null }) { create(directory = true) },
-            action("Upload Here…", AllIcons.Actions.Upload, enabled = { targetFolder() != null }) { uploadHere() },
-            action("Rename…", AllIcons.Actions.Edit, enabled = { selectedFiles().singleOrNull()?.isRoot == false }) { rename() }
+            action("New Folder…", AllIcons.Actions.NewFolder, enabled = { targetFolder()?.let { !fs.isFlowsFolder(it) } == true }) { create(directory = true) },
+            action("Upload Here…", AllIcons.Actions.Upload, enabled = { targetFolder()?.let { !fs.isFlowsFolder(it) } == true }) { uploadHere() },
+            // Flows keep their id, the instance has no rename for them.
+            action("Rename…", AllIcons.Actions.Edit, enabled = {
+                selectedFiles().singleOrNull()?.let { !it.isRoot && !fs.isFlowsFolder(it) && !fs.isFlow(it) } == true
+            }) { rename() }
                 .also { it.registerCustomShortcutSet(ActionManager.getInstance().getAction("RenameElement").shortcutSet, tree) },
-            action("Delete…", AllIcons.General.Remove, enabled = { selectedFiles().isNotEmpty() && selectedFiles().none { it.isRoot } }) { delete() }
+            action("Delete…", AllIcons.General.Remove, enabled = {
+                selectedFiles().isNotEmpty() && selectedFiles().none { it.isRoot || fs.isFlowsFolder(it) }
+            }) { delete() }
                 .also { it.registerCustomShortcutSet(CommonShortcuts.getDelete(), tree) },
             action("Close Namespace", AllIcons.Actions.Close, enabled = { selectedFiles().any { it.isRoot } }) { closeSelected() },
         )
@@ -160,7 +166,7 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
     private fun findNode(file: KestraVirtualFile): DefaultMutableTreeNode? =
         TreeUtil.treeNodeTraverser(root).filter(DefaultMutableTreeNode::class.java).find { it.userObject === file }
 
-    internal fun load(dir: KestraVirtualFile, then: () -> Unit = {}) = background("Listing ${dir.presentableUrl}", {
+    internal fun load(dir: KestraVirtualFile, then: () -> Unit = {}) = background("Listing ${dir.location}", {
         fs.list(dir)
     }) {
         rebuild(dir)
@@ -220,19 +226,28 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
     }
 
     // Reads the content in the background, so the editor never waits on the instance.
-    internal fun open(file: KestraVirtualFile) = background("Opening ${file.presentableUrl}", { file.contentsToByteArray() }) {
+    internal fun open(file: KestraVirtualFile) = background("Opening ${file.location}", { file.contentsToByteArray() }) {
         OpenFileDescriptor(project, file).navigate(true)
     }
 
     internal fun create(directory: Boolean) {
         val parent = targetFolder() ?: return
-        val kind = if (directory) "Folder" else "File"
-        val name = Messages.showInputDialog(project, "Name:", "New $kind in ${parent.presentableUrl}", null, "", nameValidator(parent)) ?: return
-        val path = NamespacePaths.join(parent.relativePath, name.trim())
+        val flow = fs.isFlowsFolder(parent)
+        if (flow && directory) return
+        val kind = if (directory) "Folder" else if (flow) "Flow" else "File"
+        val prompt = if (flow) "File name, the flow id followed by .yml:" else "Name:"
+        val name = Messages.showInputDialog(project, prompt, "New $kind in ${parent.location}", null, if (flow) ".yml" else "", nameValidator(parent))?.trim() ?: return
+        val path = NamespacePaths.join(parent.relativePath, name)
+        val template = flowTemplate(name.removeSuffix(".yml"), parent.namespace)
         background("Creating ${parent.namespace}$path", {
-            if (directory) NamespaceFilesApi().createDirectory(parent.namespace, path) else NamespaceFilesApi().write(parent.namespace, path, ByteArray(0))
+            when {
+                flow -> NamespaceFilesApi().saveFlow(parent.namespace, name.removeSuffix(".yml"), template)
+                directory -> NamespaceFilesApi().createDirectory(parent.namespace, path)
+                else -> NamespaceFilesApi().write(parent.namespace, path, ByteArray(0))
+            }
         }) {
-            val created = WriteAction.compute<KestraVirtualFile, RuntimeException> { fs.created(parent, name.trim(), directory) }
+            val created = WriteAction.compute<KestraVirtualFile, RuntimeException> { fs.created(parent, name, directory) }
+            if (flow) created.content = template.toByteArray()
             rebuild(parent)
             if (!directory) OpenFileDescriptor(project, created).navigate(true)
         }
@@ -241,10 +256,10 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
     internal fun rename() {
         val file = selectedFiles().singleOrNull()?.takeIf { !it.isRoot } ?: return
         val parent = file.parentFile() ?: return
-        val name = Messages.showInputDialog(project, "New name:", "Rename ${file.presentableUrl}", null, file.name, nameValidator(parent, file.name))?.trim() ?: return
+        val name = Messages.showInputDialog(project, "New name:", "Rename ${file.location}", null, file.name, nameValidator(parent, file.name))?.trim() ?: return
         if (name == file.name) return
         val target = NamespacePaths.join(parent.relativePath, name)
-        background("Renaming ${file.presentableUrl}", { NamespaceFilesApi().move(file.namespace, file.relativePath, target) }) {
+        background("Renaming ${file.location}", { NamespaceFilesApi().move(file.namespace, file.relativePath, target) }) {
             WriteAction.run<RuntimeException> { fs.renamed(file, name) }
             val editors = FileEditorManagerEx.getInstanceEx(project)
             editors.openFiles.filterIsInstance<KestraVirtualFile>().filter { it.path.startsWith(file.path) }.forEach(editors::updateFilePresentation)
@@ -254,10 +269,14 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
 
     internal fun delete() {
         val files = selectedFiles().filter { !it.isRoot }.ifEmpty { return }
-        val what = files.singleOrNull()?.let { "\"${it.presentableUrl}\"" + if (it.isDirectory) " and everything in it" else "" } ?: "${files.size} items"
+        val what = files.singleOrNull()?.let { "\"${it.location}\"" + if (it.isDirectory) " and everything in it" else "" } ?: "${files.size} items"
         if (Messages.showOkCancelDialog(project, "Delete $what from the instance? This cannot be undone.", "Delete from Kestra", "Delete",
                 Messages.getCancelButton(), Messages.getWarningIcon()) != Messages.OK) return
-        background("Deleting from Kestra", { files.forEach { NamespaceFilesApi().delete(it.namespace, it.relativePath) } }) {
+        background("Deleting from Kestra", {
+            files.forEach {
+                if (fs.isFlow(it)) NamespaceFilesApi().deleteFlow(it.namespace, fs.flowId(it)) else NamespaceFilesApi().delete(it.namespace, it.relativePath)
+            }
+        }) {
             val editors = FileEditorManager.getInstance(project)
             files.forEach { file ->
                 editors.openFiles.filterIsInstance<KestraVirtualFile>().filter { it == file || it.path.startsWith(file.path + "/") }.forEach(editors::closeFile)
@@ -270,14 +289,14 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
 
     private fun uploadHere() {
         val dir = targetFolder() ?: return
-        val descriptor = FileChooserDescriptor(true, true, false, false, false, true).withTitle("Upload to ${dir.presentableUrl}")
+        val descriptor = FileChooserDescriptor(true, true, false, false, false, true).withTitle("Upload to ${dir.location}")
         val chosen = FileChooser.chooseFiles(descriptor, project, null).toList().ifEmpty { return }
         val files = NamespaceUpload.gather(chosen, KestraSettings.instance.excludedNames)
         if (files.isEmpty()) {
             KestraNotifier.info(project, "No files to upload: the selection only holds excluded names.")
             return
         }
-        if (Messages.showOkCancelDialog(project, "Upload ${files.size} file(s) to ${dir.presentableUrl}? Files at the same path are overwritten.",
+        if (Messages.showOkCancelDialog(project, "Upload ${files.size} file(s) to ${dir.location}? Files at the same path are overwritten.",
                 "Upload to Kestra", "Upload", Messages.getCancelButton(), null) != Messages.OK) return
         NamespaceUpload.run(project, dir.namespace, files, dir.relativePath)
     }
@@ -285,8 +304,9 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
     private fun nameValidator(parent: KestraVirtualFile, current: String? = null) = object : InputValidator {
         override fun checkInput(input: String): Boolean {
             val name = input.trim()
+            if (fs.isFlowsFolder(parent) && !FLOW_FILE.matches(name)) return false
             return name.isNotEmpty() && '/' !in name && name != "." && name != ".." && name !in KestraFileSystem.HIDDEN &&
-                (name == current || parent.children.none { it.name == name })
+                !(parent.isRoot && name == KestraFileSystem.FLOWS) && (name == current || parent.children.none { it.name == name })
         }
 
         override fun canClose(input: String) = checkInput(input)
@@ -340,6 +360,11 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
                         append(item.namespace, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
                         append("  ${item.instance}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     }
+                    item.isDirectory && item.fileSystem.isFlowsFolder(item) -> {
+                        icon = AllIcons.Nodes.ConfigFolder
+                        append(item.name)
+                        append("  flows", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                    }
                     item.isDirectory -> {
                         icon = AllIcons.Nodes.Folder
                         append(item.name)
@@ -356,5 +381,18 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
 
     companion object {
         private const val LOADING = "Loading…"
+
+        // A flow id as Kestra accepts it, as the file name.
+        private val FLOW_FILE = Regex("[a-zA-Z0-9][a-zA-Z0-9._-]*\\.yml")
+
+        fun flowTemplate(id: String, namespace: String) = """
+            |id: $id
+            |namespace: $namespace
+            |
+            |tasks:
+            |  - id: hello
+            |    type: io.kestra.plugin.core.log.Log
+            |    message: Hello from {{ flow.id }}
+            |""".trimMargin()
     }
 }

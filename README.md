@@ -96,6 +96,8 @@ The preview uses the IDE's embedded browser (JCEF), which every JetBrains IDE sh
 
 *Tools | Kestra | Open Namespace…*, or **+** in the *Kestra Namespaces* tool window, opens a namespace as a folder of the instance: browse, open, create, rename and delete its files from the tool window, or upload local files into one of its folders. There is no local copy. Files are read from the instance when opened, and each save is uploaded in the background so the editor never waits on the instance. A refused save shows a notification with the instance's reason and a *Retry* action. Refresh lists the folders again and reloads the open files that changed on the instance. The namespaces you open are reopened with the project.
 
+The `_flows` folder holds the namespace's flows as `<id>.yml` files, with completion, validation, run and topology like any flow. Saving one updates the flow, which the instance validates first; a new `.yml` file there creates a flow from a template, and deleting one deletes the flow. Flows cannot be renamed, since their id is their name.
+
 An opened file stays bound to the instance it was read from: after switching to another instance in the settings, saving it is refused rather than written to the new instance. `.git`, `.vscode` and `.idea` folders are hidden and cannot be created inside a namespace.
 
 *Upload to Kestra Namespace…* in the Project view's context menu or *Tools | Kestra* uploads the selected files and folders to a namespace. Pick the namespace from those the instance lists, or type a new one, which is created after a confirmation. A single file goes to the exact path you enter. A selection goes under a base path, each folder keeping its name. An open file is uploaded with its unsaved changes.

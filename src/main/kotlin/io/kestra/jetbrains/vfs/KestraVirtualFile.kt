@@ -42,7 +42,8 @@ class KestraVirtualFile internal constructor(
 
     override fun getPath(): String = "$instance/$namespace" + if (isRoot) "" else relativePath
 
-    override fun getPresentableUrl(): String = "$namespace${if (isRoot) "" else relativePath} on $instance"
+    // namespace/path on host:port, for messages and titles.
+    val location: String get() = "$namespace${if (isRoot) "" else relativePath} on $instance"
 
     override fun isWritable(): Boolean = !directory
 
@@ -55,14 +56,14 @@ class KestraVirtualFile internal constructor(
     override fun getChildren(): Array<VirtualFile> = loadedChildren?.toTypedArray() ?: EMPTY_ARRAY
 
     override fun contentsToByteArray(): ByteArray {
-        if (directory) throw IOException("$presentableUrl is a folder")
+        if (directory) throw IOException("$location is a folder")
         return content ?: fs.read(this).also { content = it }
     }
 
     override fun getInputStream(): InputStream = contentsToByteArray().inputStream()
 
     override fun getOutputStream(requestor: Any?, newModificationStamp: Long, newTimeStamp: Long): OutputStream {
-        if (directory) throw IOException("$presentableUrl is a folder")
+        if (directory) throw IOException("$location is a folder")
         return object : ByteArrayOutputStream() {
             override fun close() {
                 val bytes = toByteArray()

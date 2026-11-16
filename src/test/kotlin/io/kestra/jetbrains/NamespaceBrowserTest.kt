@@ -79,8 +79,8 @@ class NamespaceBrowserTest : KestraTestCase() {
         val panel = KestraNamespacesPanel(project)
         Disposer.register(testRootDisposable, panel)
         panel.open("company.team")
-        waitFor { rows(panel).size >= 3 }
-        assertEquals(listOf("company.team", "scripts", "README.md"), rows(panel))
+        waitFor { rows(panel).size >= 4 }
+        assertEquals(listOf("company.team", "_flows", "scripts", "README.md"), rows(panel))
 
         // Saving a file uploads it in the background.
         val readme = KestraFileSystem.instance.findFileByPath("$instance/company.team/README.md") as KestraVirtualFile
@@ -136,9 +136,63 @@ class NamespaceBrowserTest : KestraTestCase() {
 
     fun testExcludedFoldersAreHiddenAndFilesOfAnotherInstanceAreNotListed() {
         val root = KestraFileSystem.instance.root(instance, "company.team")
-        assertEquals(listOf("scripts", "README.md"), KestraFileSystem.instance.list(root).map { it.name })
+        assertEquals(listOf("_flows", "scripts", "README.md"), KestraFileSystem.instance.list(root).map { it.name })
         KestraSettings.instance.update("http://elsewhere:8080", "", "INFO")
         assertThrows(IOException::class.java) { KestraFileSystem.instance.list(root) }
+    }
+
+    fun testFlowsFolderEditsTheNamespaceFlows() {
+        val flows = java.util.concurrent.ConcurrentHashMap(mapOf("hello" to "id: hello\nnamespace: company.team\ntasks: []\n"))
+        kestra.handle("GET", "/flows/company.team") { exchange, _ ->
+            FakeKestra.respond(exchange, 200, flows.keys.joinToString(",", "[", "]") { """{"id":"$it"}""" })
+        }
+        kestra.handle("GET", "/flows/company.team/hello") { exchange, _ ->
+            FakeKestra.respond(exchange, 200, com.google.gson.JsonObject().apply { addProperty("source", flows["hello"]) }.toString())
+        }
+        kestra.handle("PUT", "/flows/company.team/hello") { exchange, request ->
+            flows["hello"] = request.body
+            FakeKestra.respond(exchange, 200, "{}")
+        }
+        kestra.json("PUT", "/flows/company.team/created", status = 404) { "{}" }
+        kestra.handle("POST", "/flows") { exchange, request ->
+            flows["created"] = request.body
+            FakeKestra.respond(exchange, 200, "{}")
+        }
+        kestra.handle("DELETE", "/flows/company.team/hello") { exchange, _ ->
+            flows.remove("hello")
+            FakeKestra.respond(exchange, 204, "")
+        }
+
+        val panel = KestraNamespacesPanel(project)
+        Disposer.register(testRootDisposable, panel)
+        panel.open("company.team")
+        waitFor { "_flows" in rows(panel) }
+        panel.tree.expandRow(rows(panel).indexOf("_flows"))
+        waitFor { "hello.yml" in rows(panel) }
+
+        val hello = KestraFileSystem.instance.findFileByPath("$instance/company.team/_flows/hello.yml") as KestraVirtualFile
+        assertTrue(KestraFileSystem.instance.isFlow(hello))
+        val document = FileDocumentManager.getInstance().getDocument(hello)!!
+        assertEquals(flows["hello"], document.text)
+        // The schema, validation, run and topology recognize it as a flow.
+        assertTrue(io.kestra.jetbrains.flow.FlowYaml.isFlow(com.intellij.psi.PsiManager.getInstance(project).findFile(hello)!!))
+        WriteAction.run<RuntimeException> { document.setText("id: hello\nnamespace: company.team\ntasks: [] # edited\n") }
+        FileDocumentManager.getInstance().saveDocument(document)
+        waitFor { flows["hello"]!!.contains("# edited") }
+        assertTrue(flows["hello"]!!.contains("# edited"))
+
+        select(panel, "hello.yml")
+        TestDialogManager.setTestInputDialog(TestInputDialog { "created.yml" })
+        panel.create(directory = false)
+        waitFor { "created.yml" in rows(panel) }
+        assertTrue(flows["created"]!!.startsWith("id: created\nnamespace: company.team\n"))
+
+        select(panel, "hello.yml")
+        TestDialogManager.setTestDialog(TestDialog.OK)
+        panel.delete()
+        waitFor { "hello.yml" !in rows(panel) }
+        assertFalse(flows.containsKey("hello"))
+        assertTrue(kestra.requests.none { it.path.startsWith("/namespaces/company.team/files") && it.method != "GET" })
     }
 
     private fun rows(panel: KestraNamespacesPanel): List<String> = (0 until panel.tree.rowCount).mapNotNull { row ->

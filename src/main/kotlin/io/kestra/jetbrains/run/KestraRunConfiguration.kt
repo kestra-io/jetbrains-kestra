@@ -15,6 +15,7 @@ import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.util.ui.FormBuilder
 import io.kestra.jetbrains.KestraIcons
 import io.kestra.jetbrains.api.KestraApi
@@ -61,7 +62,8 @@ class KestraRunConfiguration(project: Project, factory: ConfigurationFactory, na
         if (flowFile.isBlank()) {
             throw RuntimeConfigurationError("Select the flow file to run.")
         }
-        if (LocalFileSystem.getInstance().findFileByPath(flowFile) == null) {
+        val file = if (flowFile.contains("://")) VirtualFileManager.getInstance().findFileByUrl(flowFile) else LocalFileSystem.getInstance().findFileByPath(flowFile)
+        if (file == null) {
             throw RuntimeConfigurationError("Flow file not found: $flowFile")
         }
         if (!KestraApi.instance.isConfigured) {

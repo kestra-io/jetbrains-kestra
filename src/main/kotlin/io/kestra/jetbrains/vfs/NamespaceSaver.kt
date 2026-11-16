@@ -44,7 +44,7 @@ class NamespaceSaver {
 
     private fun failed(file: KestraVirtualFile, e: IOException) {
         NotificationGroupManager.getInstance().getNotificationGroup(GROUP)
-            .createNotification("Not saved to Kestra", StringUtil.escapeXmlEntities("${file.presentableUrl}: ${e.message}"), NotificationType.ERROR)
+            .createNotification("Not saved to Kestra", StringUtil.escapeXmlEntities("${file.location}: ${e.message}"), NotificationType.ERROR)
             .addAction(NotificationAction.createSimpleExpiring("Retry") {
                 if (file.isValid) file.content?.let { save(file, it) }
             })

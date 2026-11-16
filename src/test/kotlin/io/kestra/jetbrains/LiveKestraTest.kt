@@ -146,6 +146,29 @@ class LiveKestraTest : BasePlatformTestCase() {
         }
     }
 
+    fun testNamespaceFlowsFolder() {
+        val files = io.kestra.jetbrains.api.NamespaceFilesApi()
+        val fs = io.kestra.jetbrains.vfs.KestraFileSystem.instance
+        val ns = "jetbrains.test"
+        val source = "id: jb_folder\nnamespace: $ns\ntasks:\n  - id: hello\n    type: io.kestra.plugin.core.log.Log\n    message: hi\n"
+        try {
+            files.saveFlow(ns, "jb_folder", source)
+            val root = fs.root(io.kestra.jetbrains.vfs.KestraFileSystem.currentInstance()!!, ns)
+            val folder = fs.list(root).single { it.name == "_flows" }
+            val flow = fs.list(folder).single { it.name == "jb_folder.yml" }
+            assertEquals(source, String(flow.contentsToByteArray()))
+            val document = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(flow)!!
+            com.intellij.openapi.application.WriteAction.run<RuntimeException> { document.setText(source.replace("message: hi", "message: edited")) }
+            com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().saveDocument(document)
+            val deadline = System.currentTimeMillis() + 10_000
+            while (!files.flowSource(ns, "jb_folder").contains("edited") && System.currentTimeMillis() < deadline) Thread.sleep(100)
+            assertTrue(files.flowSource(ns, "jb_folder").contains("message: edited"))
+        } finally {
+            runCatching { files.deleteFlow(ns, "jb_folder") }
+        }
+        assertFalse(files.flowIds(ns).contains("jb_folder"))
+    }
+
     fun testValidateReportsConstraints() {
         val results = api.validate(flow("invalid", "tasks:\n  - id: t\n    type: io.kestra.plugin.core.log.Nope\n"))!!
         val constraints = results.flatMap { it.constraints }
