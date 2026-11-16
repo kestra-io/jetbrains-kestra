@@ -25,6 +25,7 @@ Author and run Kestra flows in IntelliJ IDEA, PyCharm, WebStorm and the other Je
 - **Live validation** as you type: the instance's validate endpoint runs on the flow and reports the same errors as `flow validate`, on the line they concern.
 - **`{{ }}` autocompletion** for Pebble expressions: on Kestra 2.0+ the instance reports what this exact flow can reference, including nested task outputs, inputs, secrets, KV pairs and namespace files. Functions and filters come from the instance. A built-in list covers 1.x, and flows that do not parse yet.
 - **Run from the IDE**: validate, deploy and execute the open flow, enter its inputs, and follow the execution in the Run tool window: its state, one section per task run with its state, duration and logs, a log level filter, and a link to the execution in the Kestra UI. **Stop** kills the execution.
+- **Topology preview**: the flow's graph beside the editor, updated as you type and colored live during a run. Click a task to jump to it.
 - **Save to Kestra**: deploy the flow without running it.
 
 ## Requirements
@@ -83,6 +84,14 @@ Click the ▶ icon next to the flow's `id`, or use *Run* from the editor's conte
 - one section per task run with its state and duration. Click a section to show its logs; a failed task opens by itself.
 
 The **Log level** selector filters the logs shown. It starts at *Settings | Tools | Kestra | Default log level*. **Stop** kills the execution on the instance. The run is saved as a *Kestra flow* run configuration, so it can be started again from the toolbar.
+
+### Topology preview
+
+*Show Flow Topology* in the editor's context menu or *Tools | Kestra* opens the *Kestra Topology* tool window. It draws the graph of the flow in the editor, as the instance computes it, with plugin icons, and follows the editor as you type or switch files. While the flow runs from the IDE, each task is outlined with its state. Click a task to move the cursor to it, and use ⟳ to switch between a vertical and a horizontal layout.
+
+The preview uses the IDE's embedded browser (JCEF), which every JetBrains IDE ships with.
+
+### Saving a flow
 
 To deploy the flow without running it, use *Save Flow to Kestra* from the editor's context menu or *Tools | Kestra*.
 

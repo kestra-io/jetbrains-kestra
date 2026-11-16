@@ -20,6 +20,8 @@ import io.kestra.jetbrains.api.SseFrame
 import io.kestra.jetbrains.api.SseStream
 import io.kestra.jetbrains.flow.Flow
 import io.kestra.jetbrains.flow.FlowYaml
+import io.kestra.jetbrains.topology.KestraTopologyService
+import com.intellij.openapi.components.serviceIfCreated
 import org.jetbrains.yaml.YAMLLanguage
 import java.io.OutputStream
 import java.time.Duration
@@ -40,6 +42,7 @@ class KestraExecutionHandler(
     private val streams = CopyOnWriteArrayList<SseStream>()
 
     @Volatile private var executionId: String? = null
+    @Volatile private var flowUid = ""
     @Volatile private var stopped = false
 
     override fun startNotify() {
@@ -132,7 +135,9 @@ class KestraExecutionHandler(
             return 1
         }
         executionId = id
+        flowUid = flow.uid
         model.execution(id, api.executionPage(flow.namespace, flow.id, id))
+        topology()?.runStarted(flow.uid)
 
         val state = follow(id)
         model.state(state ?: "UNKNOWN")
@@ -213,6 +218,7 @@ class KestraExecutionHandler(
             val current = state?.string("current") ?: return@forEach
             if (taskStates.put(runId, current) != current) {
                 model.taskState(runId, taskId, current, if (current in TERMINAL) duration(state) else null, taskRun.string("value"))
+                topology()?.taskState(flowUid, taskId, current)
             }
         }
         return execution.getAsJsonObject("state")?.string("current")
@@ -225,6 +231,9 @@ class KestraExecutionHandler(
             ?: return null
         return formatDuration(seconds)
     }
+
+    // Colors an open topology preview of this flow. Not created just for that.
+    private fun topology() = project.serviceIfCreated<KestraTopologyService>()
 
     private fun JsonObject.string(name: String) = get(name)?.takeIf { it.isJsonPrimitive }?.asString
 

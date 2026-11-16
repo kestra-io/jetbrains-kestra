@@ -1,8 +1,17 @@
 package io.kestra.jetbrains.run
 
+import com.intellij.ui.JBColor
 import java.util.Locale
 
-enum class StateBucket { SUCCESS, FAILED, WARNING, RUNNING, INFO, NEUTRAL, PENDING;
+// Colors shared by the run view and the topology graph.
+enum class StateBucket(val color: JBColor) {
+    SUCCESS(JBColor(0x1E8A4C, 0x3FB97B)),
+    FAILED(JBColor(0xC62828, 0xF16B6B)),
+    WARNING(JBColor(0xB26A00, 0xF0B04F)),
+    RUNNING(JBColor(0x7A2BD9, 0xB78AF7)),
+    INFO(JBColor(0x1F6FC5, 0x6DB3F2)),
+    NEUTRAL(JBColor(0x6B6F76, 0x9DA1A8)),
+    PENDING(JBColor(0x9A7B00, 0xE5C454));
 
     companion object {
         // Same grouping as the Kestra UI and the VS Code run panel.

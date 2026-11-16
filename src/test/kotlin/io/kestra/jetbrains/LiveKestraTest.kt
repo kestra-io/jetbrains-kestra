@@ -70,6 +70,8 @@ class LiveKestraTest : BasePlatformTestCase() {
         if (user != null) {
             KestraCredentials.set(url!!, KestraCredential(AuthKind.BASIC, user, "wrong-password"))
             assertThrows(io.kestra.jetbrains.api.KestraUnauthorizedException::class.java) { api.verify() }
+            KestraCredentials.clear(url)
+            assertThrows(io.kestra.jetbrains.api.KestraUnauthorizedException::class.java) { api.verify() }
             KestraCredentials.set(url, KestraCredential(AuthKind.BASIC, user, System.getenv("KESTRA_TEST_PASSWORD").orEmpty()))
         }
         println("Live instance version: ${api.version()}")

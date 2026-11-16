@@ -258,7 +258,7 @@ class KestraRunView(private val model: RunModel, defaultLevel: String) : Executi
             set(value) {
                 field = value
                 text = value?.let(::titleCase).orEmpty()
-                foreground = COLORS[StateBucket.of(value)] ?: UIUtil.getLabelForeground()
+                foreground = StateBucket.of(value)?.color ?: UIUtil.getLabelForeground()
                 isVisible = !value.isNullOrEmpty()
             }
 
@@ -280,25 +280,15 @@ class KestraRunView(private val model: RunModel, defaultLevel: String) : Executi
     }
 
     companion object {
-        private val COLORS = mapOf(
-            StateBucket.SUCCESS to JBColor(0x1E8A4C, 0x3FB97B),
-            StateBucket.FAILED to JBColor(0xC62828, 0xF16B6B),
-            StateBucket.WARNING to JBColor(0xB26A00, 0xF0B04F),
-            StateBucket.RUNNING to JBColor(0x7A2BD9, 0xB78AF7),
-            StateBucket.INFO to JBColor(0x1F6FC5, 0x6DB3F2),
-            StateBucket.NEUTRAL to JBColor(0x6B6F76, 0x9DA1A8),
-            StateBucket.PENDING to JBColor(0x9A7B00, 0xE5C454),
-        )
-
         private fun style(color: Color) = SimpleAttributeSet().apply { StyleConstants.setForeground(this, color) }
 
         private val MUTED = style(JBColor(0x7F8389, 0x8C9096))
         private val LEVEL_STYLES = mapOf(
-            "ERROR" to style(COLORS.getValue(StateBucket.FAILED)),
-            "WARN" to style(COLORS.getValue(StateBucket.WARNING)),
-            "INFO" to style(COLORS.getValue(StateBucket.INFO)),
-            "DEBUG" to style(COLORS.getValue(StateBucket.NEUTRAL)),
-            "TRACE" to style(COLORS.getValue(StateBucket.NEUTRAL)),
+            "ERROR" to style(StateBucket.FAILED.color),
+            "WARN" to style(StateBucket.WARNING.color),
+            "INFO" to style(StateBucket.INFO.color),
+            "DEBUG" to style(StateBucket.NEUTRAL.color),
+            "TRACE" to style(StateBucket.NEUTRAL.color),
         )
     }
 }

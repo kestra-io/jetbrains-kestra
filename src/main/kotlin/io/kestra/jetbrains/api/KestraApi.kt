@@ -107,7 +107,7 @@ class KestraApi {
         val response = try {
             client.send(request, BodyHandlers.ofString())
         } catch (e: IOException) {
-            throw KestraUnreachableException(origin(url), e)
+            throw failure(url, e)
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
             throw KestraUnreachableException(origin(url), e)
@@ -130,7 +130,7 @@ class KestraApi {
         val response = try {
             client.send(request, BodyHandlers.ofLines())
         } catch (e: IOException) {
-            throw KestraUnreachableException(origin(url), e)
+            throw failure(url, e)
         }
         if (response.statusCode() != 200) {
             response.body().close()
@@ -143,6 +143,15 @@ class KestraApi {
     }
 
     // The instance version, or null if it can't be read.
+    // The client carries the IDE's authenticator for proxies, and with one set the JDK turns an unanswered
+    // 401 challenge into an IOException instead of returning the response.
+    private fun failure(url: String, e: IOException): KestraApiException =
+        if (e.message == "No credentials provided" || e.message.orEmpty().startsWith("WWW-Authenticate header missing")) {
+            KestraUnauthorizedException(origin(url))
+        } else {
+            KestraUnreachableException(origin(url), e)
+        }
+
     fun version(): String? {
         val url = settings.url
         cachedVersion?.takeIf { it.first == url }?.let { return it.second }
@@ -202,6 +211,14 @@ class KestraApi {
         stream("/logs/${KestraUrls.segment(executionId)}/follow?minLevel=${KestraUrls.segment(minLevel)}")
 
     // The plugin schema endpoint is global, not tenant-scoped.
+    // The flow's topology as the Kestra UI draws it: nodes, edges and clusters.
+    fun flowGraph(source: String): ApiResponse = postYaml("/flows/graph", source)
+
+    // 2.0+ serves one icon per class; 1.x only the full index, with the icon bytes inline. Not tenant-scoped.
+    fun pluginIcon(type: String): ApiResponse = get("/plugins/icons/${KestraUrls.segment(type)}", tenantScoped = false)
+
+    fun pluginIcons(): ApiResponse = get("/plugins/icons", tenantScoped = false, timeout = Duration.ofSeconds(60))
+
     fun flowSchema(): ApiResponse = get("/plugins/schemas/flow", tenantScoped = false, timeout = Duration.ofSeconds(120))
 
     private fun builder(url: String, timeout: Duration?): HttpRequest.Builder {

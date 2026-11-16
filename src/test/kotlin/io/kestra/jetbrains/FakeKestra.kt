@@ -59,6 +59,8 @@ class FakeKestra : AutoCloseable {
         fun respond(exchange: HttpExchange, status: Int, body: String) {
             val bytes = body.toByteArray()
             exchange.responseHeaders.add("Content-Type", "application/json")
+            // As Kestra does; the JDK client rejects a 401 without it.
+            if (status == 401) exchange.responseHeaders.add("WWW-Authenticate", "Basic")
             exchange.sendResponseHeaders(status, if (bytes.isEmpty()) -1 else bytes.size.toLong())
             if (bytes.isNotEmpty()) exchange.responseBody.use { it.write(bytes) }
         }

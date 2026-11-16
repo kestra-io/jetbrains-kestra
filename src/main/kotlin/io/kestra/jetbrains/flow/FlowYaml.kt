@@ -90,7 +90,7 @@ object FlowYaml {
     private fun anchor(element: PsiElement): PsiElement =
         ((element as? YAMLSequenceItem)?.value as? YAMLMapping)?.getKeyValueByKey("id") ?: element
 
-    private fun findItemById(root: PsiElement, id: String): YAMLSequenceItem? =
+    fun findItemById(root: PsiElement, id: String): YAMLSequenceItem? =
         PsiTreeUtil.findChildrenOfType(root, YAMLSequenceItem::class.java)
             .firstOrNull { (it.value as? YAMLMapping)?.getKeyValueByKey("id")?.valueText == id }
 

@@ -9,6 +9,7 @@
             <li><b>Live validation</b>: the instance's validate endpoint runs as you type and reports the same errors as <code>flow validate</code>.</li>
             <li><b><code>{{ }}</code> completion</b>: variables, task outputs, inputs, secrets, KV pairs, namespace files, functions and filters.</li>
             <li><b>Run from the IDE</b>: validate, deploy and execute the open flow, enter its inputs, and follow logs and task states in the Run tool window. Stop kills the execution.</li>
+            <li><b>Topology preview</b>: the flow's graph beside the editor as you type, colored live during a run.</li>
         </ul>
         <p>Set your instance in <i>Settings | Tools | Kestra</i>.</p>
     ]]></description>
@@ -35,6 +36,9 @@
         <runConfigurationProducer implementation="io.kestra.jetbrains.run.KestraRunConfigurationProducer"/>
         <runLineMarkerContributor language="yaml" implementationClass="io.kestra.jetbrains.run.KestraRunLineMarkerContributor"/>
 
+        <toolWindow id="Kestra Topology" anchor="right" secondary="false" icon="/icons/kestra.svg" doNotActivateOnStart="true"
+                    factoryClass="io.kestra.jetbrains.topology.KestraTopologyToolWindowFactory"/>
+
         <json.jsonSchemaCompletionCustomizer implementation="io.kestra.jetbrains.schema.KestraSchemaCompletionCustomizer"/>
     </extensions>
 
@@ -48,6 +52,8 @@
             <action id="Kestra.SaveFlow" class="io.kestra.jetbrains.actions.SaveFlowAction"
                     text="Save Flow to Kestra" description="Deploy the flow in the editor to the Kestra instance without running it"
                     icon="AllIcons.Actions.MenuSaveall"/>
+            <action id="Kestra.ShowTopology" class="io.kestra.jetbrains.actions.ShowTopologyAction"
+                    text="Show Flow Topology" description="Preview the graph of the flow in the editor"/>
             <action id="Kestra.DownloadSchema" class="io.kestra.jetbrains.actions.DownloadSchemaAction"
                     text="Download Kestra Schema" description="Refresh the flow schema from the Kestra instance"/>
             <separator/>
@@ -57,6 +63,9 @@
                     text="Sign Out" description="Forget the credentials for the Kestra instance"/>
         </group>
         <reference ref="Kestra.SaveFlow">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </reference>
+        <reference ref="Kestra.ShowTopology">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </reference>
     </actions>
