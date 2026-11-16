@@ -2,7 +2,6 @@ package io.kestra.jetbrains
 
 import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.process.ProcessListener
-import com.intellij.openapi.util.Key
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import io.kestra.jetbrains.api.FormPart
@@ -11,6 +10,7 @@ import io.kestra.jetbrains.api.KestraUrls
 import io.kestra.jetbrains.completion.ExpressionService
 import io.kestra.jetbrains.flow.FlowYaml
 import io.kestra.jetbrains.run.KestraExecutionHandler
+import io.kestra.jetbrains.run.RunModel
 import io.kestra.jetbrains.schema.KestraSchemaService
 import io.kestra.jetbrains.settings.AuthKind
 import io.kestra.jetbrains.settings.KestraCredential
@@ -148,7 +148,7 @@ class LiveKestraTest : BasePlatformTestCase() {
         assertEquals(output, 0, exitCode)
         assertTrue(output.contains("Hello JetBrains"))
         assertTrue(output.contains("File file-content"))
-        assertTrue(output.contains("Execution SUCCESS"))
+        assertTrue(output.contains("State SUCCESS"))
     }
 
     fun testStopKillsTheExecution() {
@@ -157,7 +157,7 @@ class LiveKestraTest : BasePlatformTestCase() {
         println(output)
         assertEquals(1, exitCode)
         assertTrue(output, output.contains("Killing execution"))
-        assertTrue(output, output.contains("Execution KILLED"))
+        assertTrue(output, output.contains("State KILLED"))
     }
 
     fun testSchemaCompletesTaskTypes() {
@@ -196,14 +196,11 @@ class LiveKestraTest : BasePlatformTestCase() {
     }
 
     private fun run(path: String, stopAfter: String?, inputs: (io.kestra.jetbrains.flow.Flow) -> List<FormPart>?): Pair<String, Int> {
-        val output = StringBuilder()
         var exitCode = -1
-        val handler = KestraExecutionHandler(project, path, inputs)
+        val model = RunModel("company.team.hello")
+        val output = RunRecorder(model)
+        val handler = KestraExecutionHandler(project, path, model, inputs)
         handler.addProcessListener(object : ProcessListener {
-            override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
-                synchronized(output) { output.append(event.text) }
-            }
-
             override fun processTerminated(event: ProcessEvent) {
                 exitCode = event.exitCode
             }
@@ -212,15 +209,15 @@ class LiveKestraTest : BasePlatformTestCase() {
         var stopped = false
         val deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(120)
         while (!handler.isProcessTerminated && System.currentTimeMillis() < deadline) {
-            if (stopAfter != null && !stopped && synchronized(output) { output.contains(stopAfter) }) {
+            if (stopAfter != null && !stopped && output.text().contains(stopAfter)) {
                 handler.destroyProcess()
                 stopped = true
             }
             PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
             Thread.sleep(50)
         }
-        assertTrue("run did not finish:\n$output", handler.isProcessTerminated)
-        return synchronized(output) { output.toString() } to exitCode
+        assertTrue("run did not finish:\n${output.text()}", handler.isProcessTerminated)
+        return output.text() to exitCode
     }
 
     companion object {

@@ -10,6 +10,10 @@ import io.kestra.jetbrains.completion.ExpressionContext
 import io.kestra.jetbrains.completion.ExpressionQuery
 import io.kestra.jetbrains.completion.PebbleFunction
 import io.kestra.jetbrains.run.LogEntry
+import io.kestra.jetbrains.run.RunModel
+import io.kestra.jetbrains.run.StateBucket
+import io.kestra.jetbrains.run.formatDuration
+import io.kestra.jetbrains.run.logLevelRank
 import com.google.gson.JsonParser
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -98,6 +102,43 @@ class PureLogicTest {
         ).asJsonObject)
         assertEquals("10:11:12.345  [WARN]  [greet] Hi", entry.format())
         assertEquals("r-0-3", entry.key)
-        assertTrue(entry.isProblem)
+    }
+
+    @Test
+    fun runModelGroupsLogsByTaskRun() {
+        fun log(run: String, task: String, index: Int, level: String = "INFO") =
+            LogEntry("2026-11-16T10:00:0${index}Z", level, task, "line $index", run, "0", "$index")
+        val model = RunModel("company.team.hello")
+        model.logs(listOf(log("r1", "each", 0), log("", "", 1)))
+        model.taskState("r1", "each", "RUNNING", null, "a")
+        model.taskState("r2", "each", "FAILED", "1.00s", "b")
+        model.logs(listOf(log("r1", "each", 2, "ERROR")))
+
+        val tasks = model.snapshot().tasks
+        assertEquals(listOf("each (a)", "flow", "each (b)"), tasks.map { it.label })
+        assertEquals(listOf("line 0", "line 2"), tasks[0].logs.map { it.message })
+        assertEquals("1.00s", tasks[2].duration)
+        assertEquals(3, model.copyText().lines().size)
+    }
+
+    @Test
+    fun runModelDropsOldestLogsPastTheCap() {
+        val model = RunModel("f")
+        model.logs((0..RunModel.MAX_LOGS).map { LogEntry(null, "INFO", "t", "$it", "r", "0", "$it") })
+        val snapshot = model.snapshot()
+        assertTrue(snapshot.truncated)
+        assertEquals(RunModel.MAX_LOGS, snapshot.tasks.single().logs.size)
+        assertEquals("1", snapshot.tasks.single().logs.first().message)
+    }
+
+    @Test
+    fun statesLevelsAndDurations() {
+        assertEquals(StateBucket.FAILED, StateBucket.of("KILLED"))
+        assertEquals(StateBucket.NEUTRAL, StateBucket.of("SOMETHING_NEW"))
+        assertNull(StateBucket.of(""))
+        assertTrue(logLevelRank("ERROR") > logLevelRank("WARN"))
+        assertEquals(0, logLevelRank("TRACE"))
+        assertEquals("0.11s", formatDuration(0.106))
+        assertEquals("1h 1m 5s", formatDuration(3665.0))
     }
 }

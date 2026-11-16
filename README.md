@@ -24,7 +24,7 @@ Author and run Kestra flows in IntelliJ IDEA, PyCharm, WebStorm and the other Je
 - **Instance-aware schema**: task, trigger and property completion plus structural validation from your instance's installed plugin versions. Once a task declares its `type`, only that plugin's properties are suggested.
 - **Live validation** as you type: the instance's validate endpoint runs on the flow and reports the same errors as `flow validate`, on the line they concern.
 - **`{{ }}` autocompletion** for Pebble expressions: on Kestra 2.0+ the instance reports what this exact flow can reference, including nested task outputs, inputs, secrets, KV pairs and namespace files. Functions and filters come from the instance. A built-in list covers 1.x, and flows that do not parse yet.
-- **Run from the IDE**: validate, deploy and execute the open flow, enter its inputs, and follow its logs and task states in the Run tool window, with a link to the execution in the Kestra UI. **Stop** kills the execution.
+- **Run from the IDE**: validate, deploy and execute the open flow, enter its inputs, and follow the execution in the Run tool window: its state, one section per task run with its state, duration and logs, a log level filter, and a link to the execution in the Kestra UI. **Stop** kills the execution.
 - **Save to Kestra**: deploy the flow without running it.
 
 ## Requirements
@@ -76,9 +76,13 @@ Inside `{{ }}`, completion opens on `{{`, `.` and `|`, and on demand with the us
 
 ### Running a flow
 
-Click the ▶ icon next to the flow's `id`, or use *Run* from the editor's context menu. The plugin validates the flow, deploys the current editor content (saved or not), asks for its inputs, starts an execution, and streams its logs and task states in the Run tool window. The console links to the execution in the Kestra UI. **Stop** kills the execution on the instance. The run is saved as a *Kestra flow* run configuration, so it can be started again from the toolbar.
+Click the ▶ icon next to the flow's `id`, or use *Run* from the editor's context menu. The plugin validates the flow, deploys the current editor content (saved or not), asks for its inputs, starts an execution, and follows it in the Run tool window:
 
-*Settings | Tools | Kestra | Minimum log level* sets which logs are streamed.
+- a header with the execution state, **Copy logs**, and **Open in Kestra**,
+- the run's progress and any validation or deployment errors,
+- one section per task run with its state and duration. Click a section to show its logs; a failed task opens by itself.
+
+The **Log level** selector filters the logs shown. It starts at *Settings | Tools | Kestra | Default log level*. **Stop** kills the execution on the instance. The run is saved as a *Kestra flow* run configuration, so it can be started again from the toolbar.
 
 To deploy the flow without running it, use *Save Flow to Kestra* from the editor's context menu or *Tools | Kestra*.
 

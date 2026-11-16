@@ -2,13 +2,12 @@ package io.kestra.jetbrains
 
 import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.process.ProcessListener
-import com.intellij.execution.process.ProcessOutputType
-import com.intellij.openapi.util.Key
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.PlatformTestUtil
 import io.kestra.jetbrains.api.FormPart
 import io.kestra.jetbrains.run.KestraExecutionHandler
+import io.kestra.jetbrains.run.RunModel
 import io.kestra.jetbrains.run.KestraRunLineMarkerContributor
 import java.util.concurrent.TimeUnit
 
@@ -36,14 +35,14 @@ class RunTest : KestraTestCase() {
         assertTrue(output, output.contains("Deployed revision 1"))
         assertTrue(output, output.contains("Execution exec1"))
         assertTrue(output, output.contains("${kestra.url}/ui/main/executions/company.team/hello/exec1"))
-        assertTrue(output, output.contains("[greet] SUCCESS in 1.50s"))
+        assertTrue(output, output.contains("[greet] SUCCESS 1.50s"))
         assertEquals(output, 1, Regex("Hello Ana").findAll(output).count())
-        assertTrue(output, output.contains("Execution SUCCESS"))
+        assertTrue(output, output.contains("State SUCCESS"))
 
         val start = kestra.requests.single { it.path == "/executions/company.team/hello" }
         assertTrue(start.headers["content-type"]!!.startsWith("multipart/form-data"))
         assertTrue(start.body.contains("name=\"user\"\r\n\r\nAna"))
-        assertTrue(kestra.requests.any { it.path == "/logs/exec1/follow?minLevel=INFO" })
+        assertTrue(kestra.requests.any { it.path == "/logs/exec1/follow?minLevel=TRACE" })
     }
 
     fun testValidationErrorsStopTheRun() {
@@ -61,7 +60,7 @@ class RunTest : KestraTestCase() {
         val file = myFixture.configureByText("flow.yml", FLOW)
         val (output, exitCode) = run(file.virtualFile.url) { null }
         assertEquals(1, exitCode)
-        assertTrue(output, output.contains("Run cancelled."))
+        assertTrue(output, output.contains("Run cancelled"))
         assertTrue(kestra.requests.none { it.path.startsWith("/executions") })
     }
 
@@ -74,14 +73,11 @@ class RunTest : KestraTestCase() {
     }
 
     private fun run(path: String, inputs: (io.kestra.jetbrains.flow.Flow) -> List<FormPart>?): Pair<String, Int> {
-        val output = StringBuilder()
         var exitCode = -1
-        val handler = KestraExecutionHandler(project, path, inputs)
+        val model = RunModel("company.team.hello")
+        val output = RunRecorder(model)
+        val handler = KestraExecutionHandler(project, path, model, inputs)
         handler.addProcessListener(object : ProcessListener {
-            override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
-                synchronized(output) { output.append(event.text) }
-            }
-
             override fun processTerminated(event: ProcessEvent) {
                 exitCode = event.exitCode
             }
@@ -92,7 +88,7 @@ class RunTest : KestraTestCase() {
             PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
             Thread.sleep(20)
         }
-        assertTrue("run did not finish:\n$output", handler.isProcessTerminated)
-        return synchronized(output) { output.toString() } to exitCode
+        assertTrue("run did not finish:\n${output.text()}", handler.isProcessTerminated)
+        return output.text() to exitCode
     }
 }

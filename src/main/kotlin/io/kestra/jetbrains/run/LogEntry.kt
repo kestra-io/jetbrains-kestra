@@ -15,8 +15,6 @@ data class LogEntry(
     val key: String
         get() = if (index != null) "$taskRunId-$attemptNumber-$index" else "$taskRunId-$attemptNumber-$timestamp-$message"
 
-    val isProblem: Boolean get() = level.equals("ERROR", true) || level.equals("WARN", true)
-
     fun format(): String {
         val time = timestamp.orEmpty().substringAfter('T', "").removeSuffix("Z").take(12).padEnd(12)
         val levelText = "[${(level ?: "INFO").uppercase()}]".padEnd(8)

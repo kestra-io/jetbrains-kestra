@@ -38,8 +38,9 @@ class KestraConfigurable : BoundConfigurable("Kestra") {
                 }
             }
             group("Runs") {
-                row("Minimum log level:") {
+                row("Default log level:") {
                     comboBox(listOf("TRACE", "DEBUG", "INFO", "WARN", "ERROR")).bindItem({ logLevel }, { logLevel = it ?: "INFO" })
+                        .comment("Level the run view starts with. Its log level selector changes it for that run.")
                 }
             }
         }

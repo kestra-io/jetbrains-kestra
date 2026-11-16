@@ -3,13 +3,13 @@ package io.kestra.jetbrains
 import com.intellij.execution.RunManager
 import com.intellij.execution.actions.ConfigurationContext
 import com.intellij.execution.executors.DefaultRunExecutor
-import com.intellij.execution.impl.ConsoleViewImpl
 import com.intellij.execution.runners.ExecutionEnvironmentBuilder
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.PlatformTestUtil
 import io.kestra.jetbrains.run.KestraRunConfiguration
+import io.kestra.jetbrains.run.KestraRunView
 import io.kestra.jetbrains.run.KestraRunConfigurationProducer
 import io.kestra.jetbrains.run.KestraRunConfigurationType
 
@@ -42,7 +42,7 @@ class RunConfigurationTest : KestraTestCase() {
         kestra.json("POST", "/flows/validate") { "[{}]" }
         kestra.json("PUT", "/flows/company.team/hello") { """{"revision":7}""" }
         kestra.json("POST", "/executions/company.team/hello") { """{"id":"e1"}""" }
-        kestra.sse("GET", "/executions/e1/follow") { listOf("progress" to """{"state":{"current":"SUCCESS"},"taskRunList":[]}""") }
+        kestra.sse("GET", "/executions/e1/follow") { listOf("progress" to """{"state":{"current":"SUCCESS"},"taskRunList":[{"id":"r","taskId":"greet","state":{"current":"SUCCESS"}}]}""") }
         kestra.sse("GET", "/logs/e1/follow") { listOf("progress" to """{"level":"INFO","message":"done","taskRunId":"r","index":0}""") }
 
         val file = myFixture.configureByText("flow.yml", noInputs)
@@ -62,14 +62,14 @@ class RunConfigurationTest : KestraTestCase() {
         }
         assertTrue(handler.isProcessTerminated)
         assertEquals(0, handler.exitCode)
-        val console = result.executionConsole as ConsoleViewImpl
-        console.component // The editor is created with the component, as when the Run tool window shows it.
-        console.flushDeferredText()
-        val text = console.editor!!.document.text
-        assertTrue(text, text.contains("Deployed revision 7"))
-        assertTrue(text, text.contains("done"))
-        assertTrue(text, text.contains("Execution SUCCESS"))
-        assertTrue(text, text.contains("Run finished with exit code 0"))
-        Disposer.dispose(console)
+        PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        val view = result.executionConsole as KestraRunView
+        view.render()
+        assertEquals("Success", view.badgeText())
+        val sections = view.sectionTexts()
+        assertEquals(sections.toString(), 1, sections.size)
+        assertTrue(sections[0], sections[0].startsWith("greet Success"))
+        assertTrue(sections[0], sections[0].contains("INFO  done"))
+        Disposer.dispose(view)
     }
 }

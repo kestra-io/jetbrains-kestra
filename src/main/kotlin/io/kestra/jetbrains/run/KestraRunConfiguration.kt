@@ -71,7 +71,7 @@ class KestraRunConfiguration(project: Project, factory: ConfigurationFactory, na
 
     override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> = Editor(project)
 
-    override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState = KestraRunProfileState(project, flowFile)
+    override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState = KestraRunProfileState(project, flowFile, name)
 
     private class Editor(project: Project) : SettingsEditor<KestraRunConfiguration>() {
         private val file = TextFieldWithBrowseButton().apply {

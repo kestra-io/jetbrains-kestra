@@ -3,12 +3,10 @@ package io.kestra.jetbrains.run
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.intellij.execution.process.ProcessHandler
-import com.intellij.execution.process.ProcessOutputType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.util.Key
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.psi.PsiFileFactory
@@ -22,20 +20,19 @@ import io.kestra.jetbrains.api.SseFrame
 import io.kestra.jetbrains.api.SseStream
 import io.kestra.jetbrains.flow.Flow
 import io.kestra.jetbrains.flow.FlowYaml
-import io.kestra.jetbrains.settings.KestraSettings
 import org.jetbrains.yaml.YAMLLanguage
 import java.io.OutputStream
 import java.time.Duration
 import java.time.Instant
-import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 
-// Validates, deploys and runs a flow, then streams the execution into the Run console.
+// Validates, deploys and runs a flow, then streams the execution into the run view's model.
 // Stop kills the execution on the instance.
 class KestraExecutionHandler(
     private val project: Project,
     private val flowFile: String,
+    val model: RunModel,
     // Returns the input values, or null when the user cancels. Replaced in tests.
     private val inputsProvider: (Flow) -> List<FormPart>? = { flow -> askInputs(project, flow) },
 ) : ProcessHandler() {
@@ -58,10 +55,10 @@ class KestraExecutionHandler(
                 closeStreams()
                 return@executeOnPooledThread
             }
-            system("Killing execution $id…")
+            model.phase("Killing execution $id…")
             runCatching { api.killExecution(id) }
-                .onSuccess { if (!it.ok) error("Kill failed (HTTP ${it.status}): ${it.message()}") }
-                .onFailure { error("Kill failed: ${it.message}") }
+                .onSuccess { if (!it.ok) model.error("Kill failed (HTTP ${it.status}): ${it.message()}") }
+                .onFailure { model.error("Kill failed: ${it.message}") }
             // The follow stream reports KILLED and closes; don't wait forever if it doesn't.
             AppExecutorUtil.getAppScheduledExecutorService().schedule({ closeStreams() }, 30, TimeUnit.SECONDS)
         }
@@ -82,12 +79,12 @@ class KestraExecutionHandler(
         try {
             exitCode = run()
         } catch (e: KestraUnauthorizedException) {
-            error(e.message.orEmpty())
+            model.error(e.message.orEmpty())
             KestraNotifier.signInRequired(project, "${e.origin} requires authentication. Sign in to run the flow.")
         } catch (e: KestraApiException) {
-            error(e.message.orEmpty())
+            model.error(e.message.orEmpty())
         } catch (e: Exception) {
-            error("Run failed: ${e.message ?: e.javaClass.simpleName}")
+            model.error("Run failed: ${e.message ?: e.javaClass.simpleName}")
         } finally {
             closeStreams()
             notifyProcessTerminated(exitCode)
@@ -96,48 +93,49 @@ class KestraExecutionHandler(
 
     private fun run(): Int {
         val (source, flow) = readFlow() ?: run {
-            error("$flowFile is not a flow: it must define 'id', 'namespace', and 'tasks' or 'triggers'.")
+            model.error("$flowFile is not a flow: it must define 'id', 'namespace', and 'tasks' or 'triggers'.")
             return 1
         }
-        system("▶ Running ${flow.uid} on ${KestraApi.origin(api.apiBase())}")
+        model.phase("Validating on ${KestraApi.origin(api.apiBase())}…")
 
         // A failed validation call is not a verdict, the deploy surfaces the real error.
         val constraints = api.validate(source)?.flatMap { it.constraints }.orEmpty()
         if (constraints.isNotEmpty()) {
-            constraints.forEach(::error)
+            model.phase("Validation failed")
+            constraints.forEach(model::error)
             return 1
         }
         if (stopped) return 1
+        model.phase("Deploying…")
 
         val deployed = api.upsertFlow(flow.namespace, flow.id, source)
         if (!deployed.ok) {
-            error("Failed to deploy the flow (HTTP ${deployed.status}): ${deployed.message()}")
+            model.error("Failed to deploy the flow (HTTP ${deployed.status}): ${deployed.message()}")
             return 1
         }
         val revision = deployed.json()?.asJsonObject?.get("revision")?.asString
-        system("Deployed${revision?.let { " revision $it" }.orEmpty()}")
+        model.phase("Deployed${revision?.let { " revision $it" }.orEmpty()}")
 
         val inputs = (if (flow.inputs().isEmpty()) emptyList() else inputsProvider(flow)) ?: run {
-            system("Run cancelled.")
+            model.phase("Run cancelled")
             return 1
         }
         if (stopped) return 1
 
         val created = api.createExecution(flow.namespace, flow.id, inputs)
         if (!created.ok) {
-            error("Failed to start the execution (HTTP ${created.status}): ${created.message()}")
+            model.error("Failed to start the execution (HTTP ${created.status}): ${created.message()}")
             return 1
         }
         val id = created.json()?.asJsonObject?.get("id")?.asString ?: run {
-            error("The instance did not return an execution id.")
+            model.error("The instance did not return an execution id.")
             return 1
         }
         executionId = id
-        system("Execution $id")
-        system("Open in Kestra: ${api.executionPage(flow.namespace, flow.id, id)}")
+        model.execution(id, api.executionPage(flow.namespace, flow.id, id))
 
         val state = follow(id)
-        system("Execution ${state ?: "UNKNOWN"}")
+        model.state(state ?: "UNKNOWN")
         return if (state == "SUCCESS" || state == "WARNING") 0 else 1
     }
 
@@ -151,9 +149,10 @@ class KestraExecutionHandler(
     }
 
     // Returns the final state. Streams are always closed on exit, an open follow leaks memory on the server.
+    // Logs are fetched at TRACE, the view filters them by level.
     private fun follow(id: String): String? {
-        val logs = runCatching { api.followLogs(id, KestraSettings.instance.logLevel) }
-            .onFailure { error("Failed to stream logs: ${it.message}") }.getOrNull()?.also(streams::add)
+        val logs = runCatching { api.followLogs(id, "TRACE") }
+            .onFailure { model.error("Failed to stream logs: ${it.message}") }.getOrNull()?.also(streams::add)
         val seen = HashSet<String>()
         val logReader = logs?.let {
             ApplicationManager.getApplication().executeOnPooledThread {
@@ -168,12 +167,12 @@ class KestraExecutionHandler(
                 val state = onExecutionFrame(frame, taskStates)
                 if (state != null && state != lastState) {
                     lastState = state
-                    if (state !in TERMINAL) system("State $state")
+                    model.state(state)
                 }
             }
         } catch (e: Exception) {
             // A dropped follow stream is not a verdict, the final fetch below decides.
-            if (!stopped) system("Execution stream disconnected: ${e.message}")
+            if (!stopped) model.phase("Execution stream disconnected: ${e.message}")
         } finally {
             // The log indexer is asynchronous, trailing lines can land after the execution ends.
             if (!stopped) Thread.sleep(LOG_GRACE.toMillis())
@@ -198,11 +197,7 @@ class KestraExecutionHandler(
             json.isJsonObject -> listOf(LogEntry.of(json.asJsonObject))
             else -> emptyList()
         }
-        for (entry in entries) {
-            if (seen.add(entry.key)) {
-                print(entry.format(), if (entry.isProblem) ProcessOutputType.STDERR else ProcessOutputType.STDOUT)
-            }
-        }
+        model.logs(entries.filter { seen.add(it.key) })
     }
 
     // The follow stream re-sends the full task list on every frame, so only report changes.
@@ -217,9 +212,7 @@ class KestraExecutionHandler(
             val state = taskRun.getAsJsonObject("state")
             val current = state?.string("current") ?: return@forEach
             if (taskStates.put(runId, current) != current) {
-                val value = taskRun.string("value")?.let { " ($it)" }.orEmpty()
-                val duration = if (current in TERMINAL) duration(state)?.let { " in $it" }.orEmpty() else ""
-                system("  [$taskId$value] $current$duration")
+                model.taskState(runId, taskId, current, if (current in TERMINAL) duration(state) else null, taskRun.string("value"))
             }
         }
         return execution.getAsJsonObject("state")?.string("current")
@@ -230,7 +223,7 @@ class KestraExecutionHandler(
         if (histories.size < 2) return null
         val seconds = runCatching { Duration.between(Instant.parse(histories.first()), Instant.parse(histories.last())).toMillis() / 1000.0 }.getOrNull()
             ?: return null
-        return "%.2fs".format(Locale.ROOT, seconds)
+        return formatDuration(seconds)
     }
 
     private fun JsonObject.string(name: String) = get(name)?.takeIf { it.isJsonPrimitive }?.asString
@@ -238,12 +231,6 @@ class KestraExecutionHandler(
     private fun closeStreams() {
         streams.forEach(SseStream::close)
     }
-
-    private fun system(text: String) = print(text, ProcessOutputType.SYSTEM)
-
-    private fun error(text: String) = print(text, ProcessOutputType.STDERR)
-
-    private fun print(text: String, type: Key<*>) = notifyTextAvailable(text + "\n", type)
 
     companion object {
         fun askInputs(project: Project, flow: Flow): List<FormPart>? {
