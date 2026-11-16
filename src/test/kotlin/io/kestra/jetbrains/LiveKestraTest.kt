@@ -125,6 +125,27 @@ class LiveKestraTest : BasePlatformTestCase() {
         assertEquals(404, gone.status)
     }
 
+    fun testNamespaceBrowserSavesThroughTheEditor() {
+        val files = io.kestra.jetbrains.api.NamespaceFilesApi()
+        val fs = io.kestra.jetbrains.vfs.KestraFileSystem.instance
+        val ns = "jetbrains.test"
+        try {
+            files.write(ns, "/jb browse/notes.md", "v1".toByteArray())
+            val root = fs.root(io.kestra.jetbrains.vfs.KestraFileSystem.currentInstance()!!, ns)
+            val dir = fs.list(root).single { it.name == "jb browse" }
+            val notes = fs.list(dir).single { it.name == "notes.md" }
+            assertEquals("v1", String(notes.contentsToByteArray()))
+            val document = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(notes)!!
+            com.intellij.openapi.application.WriteAction.run<RuntimeException> { document.setText("v2 é") }
+            com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().saveDocument(document)
+            val deadline = System.currentTimeMillis() + 10_000
+            while (String(files.read(ns, "/jb browse/notes.md")) != "v2 é" && System.currentTimeMillis() < deadline) Thread.sleep(100)
+            assertEquals("v2 é", String(files.read(ns, "/jb browse/notes.md")))
+        } finally {
+            runCatching { files.delete(ns, "/jb browse") }
+        }
+    }
+
     fun testValidateReportsConstraints() {
         val results = api.validate(flow("invalid", "tasks:\n  - id: t\n    type: io.kestra.plugin.core.log.Nope\n"))!!
         val constraints = results.flatMap { it.constraints }

@@ -9,7 +9,7 @@
             <li><b>Live validation</b>: the instance's validate endpoint runs as you type and reports the same errors as <code>flow validate</code>.</li>
             <li><b><code>{{ }}</code> completion</b>: variables, task outputs, inputs, secrets, KV pairs, namespace files, functions and filters.</li>
             <li><b>Run from the IDE</b>: validate, deploy and execute the open flow, enter its inputs, and follow logs and task states in the Run tool window. Stop kills the execution.</li>
-            <li><b>Namespace files</b>: upload files, or sync a folder, to a namespace.</li>
+            <li><b>Namespace files</b>: browse and edit the files of a namespace, upload files, or sync a folder to it.</li>
             <li><b>Topology preview</b>: the flow's graph beside the editor as you type, colored live during a run.</li>
         </ul>
         <p>Set your instance in <i>Settings | Tools | Kestra</i>.</p>
@@ -40,6 +40,11 @@
         <toolWindow id="Kestra Topology" anchor="right" secondary="false" icon="/icons/kestra.svg" doNotActivateOnStart="true"
                     factoryClass="io.kestra.jetbrains.topology.KestraTopologyToolWindowFactory"/>
 
+        <toolWindow id="Kestra Namespaces" anchor="left" secondary="true" icon="/icons/kestra.svg" doNotActivateOnStart="true"
+                    factoryClass="io.kestra.jetbrains.namespace.KestraNamespacesToolWindowFactory"/>
+        <virtualFileSystem key="kestra" implementationClass="io.kestra.jetbrains.vfs.KestraFileSystem" physical="false"/>
+        <notificationGroup id="Kestra Namespace Files" displayType="STICKY_BALLOON"/>
+
         <json.jsonSchemaCompletionCustomizer implementation="io.kestra.jetbrains.schema.KestraSchemaCompletionCustomizer"/>
     </extensions>
 
@@ -56,6 +61,8 @@
             <action id="Kestra.ShowTopology" class="io.kestra.jetbrains.actions.ShowTopologyAction"
                     text="Show Flow Topology" description="Preview the graph of the flow in the editor"/>
             <separator/>
+            <action id="Kestra.OpenNamespace" class="io.kestra.jetbrains.actions.OpenNamespaceAction"
+                    text="Open Namespace…" description="Browse and edit the files of a namespace on the Kestra instance"/>
             <action id="Kestra.UploadToNamespace" class="io.kestra.jetbrains.actions.UploadToNamespaceAction"
                     text="Upload to Kestra Namespace…" description="Upload the selected files and folders to a namespace of the Kestra instance"/>
             <action id="Kestra.SyncFolderToNamespace" class="io.kestra.jetbrains.actions.SyncFolderToNamespaceAction"

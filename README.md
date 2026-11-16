@@ -26,7 +26,7 @@ Author and run Kestra flows in IntelliJ IDEA, PyCharm, WebStorm and the other Je
 - **`{{ }}` autocompletion** for Pebble expressions: on Kestra 2.0+ the instance reports what this exact flow can reference, including nested task outputs, inputs, secrets, KV pairs and namespace files. Functions and filters come from the instance. A built-in list covers 1.x, and flows that do not parse yet.
 - **Run from the IDE**: validate, deploy and execute the open flow, enter its inputs, and follow the execution in the Run tool window: its state, one section per task run with its state, duration and logs, a log level filter, and a link to the execution in the Kestra UI. **Stop** kills the execution.
 - **Topology preview**: the flow's graph beside the editor, updated as you type and colored live during a run. Click a task to jump to it.
-- **Namespace files**: upload files, or sync a folder, to a namespace.
+- **Namespace files**: browse and edit the files of a namespace on the instance, upload files, or sync a folder to it.
 - **Save to Kestra**: deploy the flow without running it.
 
 ## Requirements
@@ -93,6 +93,10 @@ The **Log level** selector filters the logs shown. It starts at *Settings | Tool
 The preview uses the IDE's embedded browser (JCEF), which every JetBrains IDE ships with.
 
 ### Namespace files
+
+*Tools | Kestra | Open Namespace…*, or **+** in the *Kestra Namespaces* tool window, opens a namespace as a folder of the instance: browse, open, create, rename and delete its files from the tool window, or upload local files into one of its folders. There is no local copy. Files are read from the instance when opened, and each save is uploaded in the background so the editor never waits on the instance. A refused save shows a notification with the instance's reason and a *Retry* action. Refresh lists the folders again and reloads the open files that changed on the instance. The namespaces you open are reopened with the project.
+
+An opened file stays bound to the instance it was read from: after switching to another instance in the settings, saving it is refused rather than written to the new instance. `.git`, `.vscode` and `.idea` folders are hidden and cannot be created inside a namespace.
 
 *Upload to Kestra Namespace…* in the Project view's context menu or *Tools | Kestra* uploads the selected files and folders to a namespace. Pick the namespace from those the instance lists, or type a new one, which is created after a confirmation. A single file goes to the exact path you enter. A selection goes under a base path, each folder keeping its name. An open file is uploaded with its unsaved changes.
 
