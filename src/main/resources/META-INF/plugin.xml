@@ -1,0 +1,24 @@
+<idea-plugin>
+    <id>io.kestra.jetbrains</id>
+    <name>Kestra</name>
+    <vendor url="https://kestra.io">Kestra</vendor>
+    <description><![CDATA[
+        <p>Author and run <a href="https://kestra.io">Kestra</a> flows from your JetBrains IDE, backed by the Kestra instance you connect to.</p>
+        <ul>
+            <li><b>Instance-aware schema</b>: task and property completion and structural validation from the plugin versions installed on your instance.</li>
+            <li><b>Live validation</b>: the instance's validate endpoint runs as you type and reports the same errors as <code>flow validate</code>.</li>
+            <li><b><code>{{ }}</code> completion</b>: variables, task outputs, inputs, secrets, KV pairs, namespace files, functions and filters.</li>
+            <li><b>Run from the IDE</b>: validate, deploy and execute the open flow, enter its inputs, and follow logs and task states in the Run tool window. Stop kills the execution.</li>
+        </ul>
+        <p>Set your instance in <i>Settings | Tools | Kestra</i>.</p>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.yaml</depends>
+    <depends>com.intellij.modules.json</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup id="Kestra" displayType="BALLOON"/>
+
+    </extensions>
+</idea-plugin>
