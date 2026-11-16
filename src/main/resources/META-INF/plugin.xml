@@ -9,6 +9,7 @@
             <li><b>Live validation</b>: the instance's validate endpoint runs as you type and reports the same errors as <code>flow validate</code>.</li>
             <li><b><code>{{ }}</code> completion</b>: variables, task outputs, inputs, secrets, KV pairs, namespace files, functions and filters.</li>
             <li><b>Run from the IDE</b>: validate, deploy and execute the open flow, enter its inputs, and follow logs and task states in the Run tool window. Stop kills the execution.</li>
+            <li><b>Namespace files</b>: upload files, or sync a folder, to a namespace.</li>
             <li><b>Topology preview</b>: the flow's graph beside the editor as you type, colored live during a run.</li>
         </ul>
         <p>Set your instance in <i>Settings | Tools | Kestra</i>.</p>
@@ -54,6 +55,12 @@
                     icon="AllIcons.Actions.MenuSaveall"/>
             <action id="Kestra.ShowTopology" class="io.kestra.jetbrains.actions.ShowTopologyAction"
                     text="Show Flow Topology" description="Preview the graph of the flow in the editor"/>
+            <separator/>
+            <action id="Kestra.UploadToNamespace" class="io.kestra.jetbrains.actions.UploadToNamespaceAction"
+                    text="Upload to Kestra Namespace…" description="Upload the selected files and folders to a namespace of the Kestra instance"/>
+            <action id="Kestra.SyncFolderToNamespace" class="io.kestra.jetbrains.actions.SyncFolderToNamespaceAction"
+                    text="Sync Folder to Kestra Namespace…" description="Upload every file of a folder to a namespace of the Kestra instance"/>
+            <separator/>
             <action id="Kestra.DownloadSchema" class="io.kestra.jetbrains.actions.DownloadSchemaAction"
                     text="Download Kestra Schema" description="Refresh the flow schema from the Kestra instance"/>
             <separator/>
@@ -68,5 +75,11 @@
         <reference ref="Kestra.ShowTopology">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </reference>
+        <group id="Kestra.ProjectViewNamespace">
+            <separator/>
+            <reference ref="Kestra.UploadToNamespace"/>
+            <reference ref="Kestra.SyncFolderToNamespace"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </group>
     </actions>
 </idea-plugin>

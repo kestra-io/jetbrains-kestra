@@ -105,6 +105,26 @@ class LiveKestraTest : BasePlatformTestCase() {
         assertDoesntContain(provider, "region", "accessKeyId")
     }
 
+    fun testNamespaceFilesRoundTrip() {
+        val files = io.kestra.jetbrains.api.NamespaceFilesApi()
+        val ns = "jetbrains.test"
+        try {
+            files.write(ns, "/jb dir/a b.txt", "héllo".toByteArray())
+            files.write(ns, "/jb dir/archive.zip", byteArrayOf(80, 75, 3, 4))
+            assertEquals(setOf("a b.txt" to false, "archive.zip" to false), files.list(ns, "/jb dir").map { it.name to it.directory }.toSet())
+            assertEquals("héllo", String(files.read(ns, "/jb dir/a b.txt")))
+            files.move(ns, "/jb dir/a b.txt", "/jb dir/renamed.txt")
+            files.createDirectory(ns, "/jb dir/sub")
+            assertEquals(setOf("renamed.txt", "archive.zip", "sub"), files.list(ns, "/jb dir").map { it.name }.toSet())
+            // The instance lists the namespaces that have flows.
+            assertFalse(files.namespaces().isEmpty())
+        } finally {
+            runCatching { files.delete(ns, "/jb dir") }
+        }
+        val gone = runCatching { files.list(ns, "/jb dir") }.exceptionOrNull() as io.kestra.jetbrains.api.NamespaceFilesException
+        assertEquals(404, gone.status)
+    }
+
     fun testValidateReportsConstraints() {
         val results = api.validate(flow("invalid", "tasks:\n  - id: t\n    type: io.kestra.plugin.core.log.Nope\n"))!!
         val constraints = results.flatMap { it.constraints }

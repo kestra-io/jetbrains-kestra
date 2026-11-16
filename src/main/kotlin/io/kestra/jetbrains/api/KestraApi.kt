@@ -15,6 +15,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpRequest.BodyPublisher
 import java.net.http.HttpRequest.BodyPublishers
+import java.net.http.HttpResponse
 import java.net.http.HttpResponse.BodyHandlers
 import java.time.Duration
 import java.util.stream.Stream
@@ -33,10 +34,12 @@ class ApiResponse(val status: Int, val body: String) {
 
     fun json(): JsonElement? = runCatching { JsonParser.parseString(body) }.getOrNull()
 
-    // The server's error body carries the reason.
-    fun message(): String =
-        json()?.takeIf { it.isJsonObject }?.asJsonObject?.get("message")?.takeIf { it.isJsonPrimitive }?.asString
+    // The server's error body carries the reason: "message" on 1.x, a problem+json "detail" on 2.x.
+    fun message(): String {
+        val obj = json()?.takeIf { it.isJsonObject }?.asJsonObject
+        return listOf("message", "detail", "title").firstNotNullOfOrNull { key -> obj?.get(key)?.takeIf { it.isJsonPrimitive }?.asString }
             ?: body.take(500).ifBlank { "HTTP $status" }
+    }
 }
 
 // A Server-Sent Events stream. close() ends the read loop from another thread.
@@ -100,12 +103,32 @@ class KestraApi {
         contentType: String? = null,
         timeout: Duration = Duration.ofSeconds(30),
     ): ApiResponse {
+        val response = send(method, path, tenantScoped, body, contentType, timeout, BodyHandlers.ofString())
+        return ApiResponse(response.statusCode(), response.body())
+    }
+
+    // For binary content. A failed response still carries the server's reason as text.
+    fun download(path: String, timeout: Duration = Duration.ofSeconds(60)): Pair<ApiResponse, ByteArray> {
+        val response = send("GET", path, true, BodyPublishers.noBody(), null, timeout, BodyHandlers.ofByteArray())
+        val bytes = response.body()
+        return ApiResponse(response.statusCode(), if (response.statusCode() in 200..299) "" else String(bytes, Charsets.UTF_8)) to bytes
+    }
+
+    private fun <T> send(
+        method: String,
+        path: String,
+        tenantScoped: Boolean,
+        body: BodyPublisher,
+        contentType: String?,
+        timeout: Duration,
+        handler: HttpResponse.BodyHandler<T>,
+    ): HttpResponse<T> {
         val url = (if (tenantScoped) tenantBase() else apiBase()) + path
         val request = builder(url, timeout).method(method, body).apply {
             contentType?.let { header("Content-Type", it) }
         }.build()
         val response = try {
-            client.send(request, BodyHandlers.ofString())
+            client.send(request, handler)
         } catch (e: IOException) {
             throw failure(url, e)
         } catch (e: InterruptedException) {
@@ -115,7 +138,7 @@ class KestraApi {
         if (response.statusCode() == 401) {
             throw KestraUnauthorizedException(origin(url))
         }
-        return ApiResponse(response.statusCode(), response.body())
+        return response
     }
 
     fun get(path: String, tenantScoped: Boolean = true, timeout: Duration = Duration.ofSeconds(30)) =

@@ -26,6 +26,7 @@ Author and run Kestra flows in IntelliJ IDEA, PyCharm, WebStorm and the other Je
 - **`{{ }}` autocompletion** for Pebble expressions: on Kestra 2.0+ the instance reports what this exact flow can reference, including nested task outputs, inputs, secrets, KV pairs and namespace files. Functions and filters come from the instance. A built-in list covers 1.x, and flows that do not parse yet.
 - **Run from the IDE**: validate, deploy and execute the open flow, enter its inputs, and follow the execution in the Run tool window: its state, one section per task run with its state, duration and logs, a log level filter, and a link to the execution in the Kestra UI. **Stop** kills the execution.
 - **Topology preview**: the flow's graph beside the editor, updated as you type and colored live during a run. Click a task to jump to it.
+- **Namespace files**: upload files, or sync a folder, to a namespace.
 - **Save to Kestra**: deploy the flow without running it.
 
 ## Requirements
@@ -90,6 +91,16 @@ The **Log level** selector filters the logs shown. It starts at *Settings | Tool
 *Show Flow Topology* in the editor's context menu or *Tools | Kestra* opens the *Kestra Topology* tool window. It draws the graph of the flow in the editor, as the instance computes it, with plugin icons, and follows the editor as you type or switch files. While the flow runs from the IDE, each task is outlined with its state. Click a task to move the cursor to it, and use ⟳ to switch between a vertical and a horizontal layout.
 
 The preview uses the IDE's embedded browser (JCEF), which every JetBrains IDE ships with.
+
+### Namespace files
+
+*Upload to Kestra Namespace…* in the Project view's context menu or *Tools | Kestra* uploads the selected files and folders to a namespace. Pick the namespace from those the instance lists, or type a new one, which is created after a confirmation. A single file goes to the exact path you enter. A selection goes under a base path, each folder keeping its name. An open file is uploaded with its unsaved changes.
+
+*Sync Folder to Kestra Namespace…* uploads every file of a folder, the selected one or one you pick. Files at the same path are overwritten, and files that exist only on the instance are kept.
+
+Names listed in *Settings | Tools | Kestra | Excluded names* are skipped: metadata and secrets such as `.git`, `.env` and `*.pem` by default. A leading or trailing `*` is a wildcard.
+
+Uploads respect the instance's permissions: a refused upload stops the batch and reports the reason given by the instance.
 
 ### Saving a flow
 

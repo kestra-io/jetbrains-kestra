@@ -17,11 +17,13 @@ class KestraConfigurable : BoundConfigurable("Kestra") {
     private var url = ""
     private var tenant = ""
     private var logLevel = "INFO"
+    private var excludedNames = ""
 
     override fun createPanel(): DialogPanel {
         url = settings.url
         tenant = settings.tenant
         logLevel = settings.logLevel
+        excludedNames = settings.excludedNames.joinToString("\n")
         return panel {
             group("Instance") {
                 row("URL:") {
@@ -43,6 +45,15 @@ class KestraConfigurable : BoundConfigurable("Kestra") {
                         .comment("Level the run view starts with. Its log level selector changes it for that run.")
                 }
             }
+            group("Namespace Files") {
+                row("Excluded names:") {
+                    textArea().bindText(::excludedNames).applyToComponent { rows = 6 }.align(AlignX.FILL)
+                        .comment("One per line. Skipped when uploading a folder to a namespace. A leading or trailing * is a wildcard, for example *.pem or .env.*")
+                }
+                row {
+                    link("Restore defaults") { excludedNames = KestraSettings.DEFAULT_EXCLUDED_NAMES.joinToString("\n"); reset() }
+                }
+            }
         }
     }
 
@@ -50,6 +61,7 @@ class KestraConfigurable : BoundConfigurable("Kestra") {
         super.apply()
         val changed = url.trim() != settings.url || tenant.trim() != settings.tenant
         settings.update(url, tenant, logLevel)
+        settings.excludedNames = KestraSettings.parseNames(excludedNames)
         if (changed) {
             ApplicationManager.getApplication().executeOnPooledThread { KestraSchemaService.instance.downloadQuietly() }
         }
