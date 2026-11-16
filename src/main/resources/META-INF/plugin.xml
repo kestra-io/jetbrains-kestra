@@ -23,6 +23,8 @@
         <notificationGroup id="Kestra" displayType="BALLOON"/>
         <postStartupActivity implementation="io.kestra.jetbrains.KestraStartupActivity"/>
 
+        <externalAnnotator language="yaml" implementationClass="io.kestra.jetbrains.validation.KestraValidationAnnotator"/>
+
         <json.jsonSchemaCompletionCustomizer implementation="io.kestra.jetbrains.schema.KestraSchemaCompletionCustomizer"/>
     </extensions>
 
