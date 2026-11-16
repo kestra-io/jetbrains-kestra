@@ -25,6 +25,7 @@ Author and run Kestra flows in IntelliJ IDEA, PyCharm, WebStorm and the other Je
 - **Live validation** as you type: the instance's validate endpoint runs on the flow and reports the same errors as `flow validate`, on the line they concern.
 - **`{{ }}` autocompletion** for Pebble expressions: on Kestra 2.0+ the instance reports what this exact flow can reference, including nested task outputs, inputs, secrets, KV pairs and namespace files. Functions and filters come from the instance. A built-in list covers 1.x, and flows that do not parse yet.
 - **Run from the IDE**: validate, deploy and execute the open flow, enter its inputs, and follow the execution in the Run tool window: its state, one section per task run with its state, duration and logs, a log level filter, and a link to the execution in the Kestra UI. **Stop** kills the execution.
+- **Documentation**: the Kestra docs beside the editor, versioned to the instance, with search, the plugin browser, and the documentation of the task under the cursor.
 - **Topology preview**: the flow's graph beside the editor, updated as you type and colored live during a run. Click a task to jump to it.
 - **Namespace files**: browse and edit the files of a namespace on the instance, upload files, or sync a folder to it.
 - **Save to Kestra**: deploy the flow without running it.
@@ -85,6 +86,10 @@ Click the ▶ icon next to the flow's `id`, or use *Run* from the editor's conte
 - one section per task run with its state and duration. Click a section to show its logs; a failed task opens by itself.
 
 The **Log level** selector filters the logs shown. It starts at *Settings | Tools | Kestra | Default log level*. **Stop** kills the execution on the instance. The run is saved as a *Kestra flow* run configuration, so it can be started again from the toolbar.
+
+### Documentation
+
+*Tools | Kestra | Open Kestra Documentation* opens the *Kestra Documentation* tool window, like the docs tab of the Kestra UI: search the docs, browse the plugins and their tasks with breadcrumbs, and read pages matching the version of the connected instance. While it is shown, placing the cursor on a task, trigger or condition shows that plugin's documentation, with its examples, properties and outputs, as installed on the instance. Links open in the browser.
 
 ### Topology preview
 

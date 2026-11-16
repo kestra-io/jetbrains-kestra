@@ -10,8 +10,8 @@ import io.kestra.jetbrains.settings.KestraSettings
 import java.util.Optional
 import java.util.concurrent.ConcurrentHashMap
 
-// Plugin icons as data URIs, cached per instance. 2.0+ serves one icon per class, 1.x only the full index
-// with the icon bytes inline. Network calls: background threads only.
+// Plugin and plugin group icons as data URIs, cached per instance. 2.0+ serves one icon per class or group,
+// 1.x only the full indexes with the icon bytes inline. Network calls: background threads only.
 @Service
 class PluginIcons {
     private val cache = ConcurrentHashMap<String, Optional<String>>()
@@ -39,7 +39,13 @@ class PluginIcons {
             val response = api.pluginIcon(type)
             return if (response.ok) response.json().icon(type, nested = true) else null
         }
-        val all = index ?: api.pluginIcons().takeIf { it.ok }?.json()?.takeIf { it.isJsonObject }?.asJsonObject?.also { index = it }
+        // Plugin types and plugin groups have separate indexes on 1.x.
+        val all = index ?: JsonObject().also { merged ->
+            listOf(api.pluginIcons(), api.get("/plugins/icons/groups", tenantScoped = false, timeout = java.time.Duration.ofSeconds(60)))
+                .mapNotNull { response -> response.takeIf { it.ok }?.json()?.takeIf { it.isJsonObject }?.asJsonObject }
+                .forEach { json -> json.entrySet().forEach { (key, value) -> merged.add(key, value) } }
+            index = merged
+        }
         return all.icon(type, nested = false)
     }
 

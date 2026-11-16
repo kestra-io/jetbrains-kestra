@@ -169,6 +169,22 @@ class LiveKestraTest : BasePlatformTestCase() {
         assertFalse(files.flowIds(ns).contains("jb_folder"))
     }
 
+    fun testDocumentationForTheInstanceVersion() {
+        val docs = io.kestra.jetbrains.docs.DocsApi
+        fun args(vararg pairs: Pair<String, String>) = com.google.gson.JsonObject().apply { pairs.forEach { (k, v) -> addProperty(k, v) } }
+        val results = docs.handle("search", args("q" to "subflow")).asJsonArray
+        assertFalse(results.isEmpty)
+        val path = results[0].asJsonObject.get("path").asString
+        val page = docs.handle("doc", args("path" to path)).asJsonObject
+        assertTrue(page.get("markdown").asString.isNotBlank())
+        assertFalse(page.get("title").asString, page.get("title").asString.contains('?'))
+        val log = docs.handle("definition", args("type" to "io.kestra.plugin.core.log.Log")).asJsonObject
+        assertTrue(log.getAsJsonObject("schema").getAsJsonObject("properties").getAsJsonObject("properties").has("message"))
+        assertTrue(docs.handle("subgroups", com.google.gson.JsonObject()).asJsonArray.size() > 0)
+        val icons = docs.handle("icons", com.google.gson.JsonParser.parseString("""{"keys":["io.kestra.plugin.core","io.kestra.plugin.core.log.Log"]}""").asJsonObject).asJsonObject
+        assertEquals(setOf("io.kestra.plugin.core", "io.kestra.plugin.core.log.Log"), icons.keySet())
+    }
+
     fun testValidateReportsConstraints() {
         val results = api.validate(flow("invalid", "tasks:\n  - id: t\n    type: io.kestra.plugin.core.log.Nope\n"))!!
         val constraints = results.flatMap { it.constraints }

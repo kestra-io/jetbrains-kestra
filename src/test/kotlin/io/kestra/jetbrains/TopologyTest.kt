@@ -92,7 +92,7 @@ class TopologyTest : KestraTestCase() {
         kestra.json("GET", "/plugins/icons") { """{"io.kestra.plugin.core.log.Log":{"icon":"QQ=="},"other.Type":{"icon":"Qg=="}}""" }
         val icons = PluginIcons.instance.icons(listOf("io.kestra.plugin.core.log.Log", "io.kestra.plugin.core.flow.Parallel"))
         assertEquals(mapOf("io.kestra.plugin.core.log.Log" to "data:image/svg+xml;base64,QQ=="), icons)
-        assertTrue(kestra.requests.none { it.path.startsWith("/plugins/icons/") })
+        assertTrue(kestra.requests.none { it.path.startsWith("/plugins/icons/") && it.path != "/plugins/icons/groups" })
     }
 
     fun testNoticesWhenNotAFlowOrNotSignedIn() {

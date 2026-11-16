@@ -10,6 +10,7 @@
             <li><b><code>{{ }}</code> completion</b>: variables, task outputs, inputs, secrets, KV pairs, namespace files, functions and filters.</li>
             <li><b>Run from the IDE</b>: validate, deploy and execute the open flow, enter its inputs, and follow logs and task states in the Run tool window. Stop kills the execution.</li>
             <li><b>Namespace files</b>: browse and edit the files of a namespace, upload files, or sync a folder to it.</li>
+            <li><b>Documentation</b>: the Kestra docs beside the editor, versioned to the instance, following the task under the cursor.</li>
             <li><b>Topology preview</b>: the flow's graph beside the editor as you type, colored live during a run.</li>
         </ul>
         <p>Set your instance in <i>Settings | Tools | Kestra</i>.</p>
@@ -40,6 +41,8 @@
         <toolWindow id="Kestra Topology" anchor="right" secondary="false" icon="/icons/kestra.svg" doNotActivateOnStart="true"
                     factoryClass="io.kestra.jetbrains.topology.KestraTopologyToolWindowFactory"/>
 
+        <toolWindow id="Kestra Documentation" anchor="right" icon="/icons/kestra.svg" doNotActivateOnStart="true"
+                    factoryClass="io.kestra.jetbrains.docs.KestraDocsToolWindowFactory"/>
         <toolWindow id="Kestra Namespaces" anchor="left" secondary="true" icon="/icons/kestra.svg" doNotActivateOnStart="true"
                     factoryClass="io.kestra.jetbrains.namespace.KestraNamespacesToolWindowFactory"/>
         <virtualFileSystem key="kestra" implementationClass="io.kestra.jetbrains.vfs.KestraFileSystem" physical="false"/>
@@ -58,6 +61,9 @@
             <action id="Kestra.SaveFlow" class="io.kestra.jetbrains.actions.SaveFlowAction"
                     text="Save Flow to Kestra" description="Deploy the flow in the editor to the Kestra instance without running it"
                     icon="AllIcons.Actions.MenuSaveall"/>
+            <action id="Kestra.OpenDocumentation" class="io.kestra.jetbrains.actions.OpenDocumentationAction"
+                    text="Open Kestra Documentation" description="Show the Kestra documentation beside the editor"
+                    icon="AllIcons.Actions.Help"/>
             <action id="Kestra.ShowTopology" class="io.kestra.jetbrains.actions.ShowTopologyAction"
                     text="Show Flow Topology" description="Preview the graph of the flow in the editor"/>
             <separator/>

@@ -31,6 +31,22 @@ object FlowYaml {
         return (toValue(root(file)) as? Map<String, Any?>)?.let(::Flow)
     }
 
+    // The plugin type of the innermost mapping around the offset that declares one: a task, a trigger,
+    // a condition or a task runner. Null outside of any.
+    fun typeAt(file: PsiFile, offset: Int): String? {
+        val element = file.findElementAt(offset)?.takeIf { it !is com.intellij.psi.PsiWhiteSpace }
+            ?: file.findElementAt((offset - 1).coerceAtLeast(0)) ?: return null
+        var mapping = PsiTreeUtil.getParentOfType(element, YAMLMapping::class.java)
+        while (mapping != null) {
+            val type = mapping.getKeyValueByKey("type")?.valueText
+            if (type != null && PLUGIN_TYPE.matches(type)) return type
+            mapping = PsiTreeUtil.getParentOfType(mapping, YAMLMapping::class.java)
+        }
+        return null
+    }
+
+    private val PLUGIN_TYPE = Regex("""[A-Za-z_][\w]*(\.[\w$]+)+""")
+
     // Maps and sequences become Map/List, scalars their text value.
     fun toValue(value: YAMLValue?): Any? = when (value) {
         is YAMLMapping -> value.keyValues.associate { it.keyText to toValue(it.value) }
