@@ -25,6 +25,10 @@
 
         <externalAnnotator language="yaml" implementationClass="io.kestra.jetbrains.validation.KestraValidationAnnotator"/>
 
+        <configurationType implementation="io.kestra.jetbrains.run.KestraRunConfigurationType"/>
+        <runConfigurationProducer implementation="io.kestra.jetbrains.run.KestraRunConfigurationProducer"/>
+        <runLineMarkerContributor language="yaml" implementationClass="io.kestra.jetbrains.run.KestraRunLineMarkerContributor"/>
+
         <json.jsonSchemaCompletionCustomizer implementation="io.kestra.jetbrains.schema.KestraSchemaCompletionCustomizer"/>
     </extensions>
 
@@ -35,6 +39,9 @@
     <actions>
         <group id="Kestra.Menu" text="Kestra" popup="true" icon="/icons/kestra.svg">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="Kestra.SaveFlow" class="io.kestra.jetbrains.actions.SaveFlowAction"
+                    text="Save Flow to Kestra" description="Deploy the flow in the editor to the Kestra instance without running it"
+                    icon="AllIcons.Actions.MenuSaveall"/>
             <action id="Kestra.DownloadSchema" class="io.kestra.jetbrains.actions.DownloadSchemaAction"
                     text="Download Kestra Schema" description="Refresh the flow schema from the Kestra instance"/>
             <separator/>
@@ -43,5 +50,8 @@
             <action id="Kestra.SignOut" class="io.kestra.jetbrains.actions.SignOutAction"
                     text="Sign Out" description="Forget the credentials for the Kestra instance"/>
         </group>
+        <reference ref="Kestra.SaveFlow">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </reference>
     </actions>
 </idea-plugin>
