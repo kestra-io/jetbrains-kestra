@@ -245,7 +245,13 @@ class KestraApi {
     fun flowSchema(): ApiResponse = get("/plugins/schemas/flow", tenantScoped = false, timeout = Duration.ofSeconds(120))
 
     private fun builder(url: String, timeout: Duration?): HttpRequest.Builder {
-        val builder = HttpRequest.newBuilder(URI.create(url))
+        val uri = URI.create(url)
+        val builder = HttpRequest.newBuilder(uri)
+        // On plain http the JDK client tries an h2c upgrade, and some reverse proxies never answer an
+        // upgrade request that carries a body, so the request times out. Kestra serves HTTP/1.1 there anyway.
+        if (uri.scheme.equals("http", ignoreCase = true)) {
+            builder.version(HttpClient.Version.HTTP_1_1)
+        }
         timeout?.let { builder.timeout(it) }
         KestraCredentials.get(settings.url)?.header()?.let { (name, value) -> builder.header(name, value) }
         return builder
