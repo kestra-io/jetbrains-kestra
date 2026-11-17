@@ -93,7 +93,15 @@ Run it against a 1.x image too (`kestra/kestra:v1.3.47` for example) when changi
 
 ### Publishing a version
 
-Push a tag:
+The plugin's change notes, shown in the IDE's *What's New* tab and on the Marketplace, come from
+[CHANGELOG.md](CHANGELOG.md): the section of the version being built, or *Unreleased* when it has none. Add
+user-facing changes under *Unreleased* as they land. Before tagging, move them under the new version and commit:
+
+```shell
+./gradlew patchChangelog -Pversion=0.2.0
+```
+
+Then push a tag:
 
 ```shell
 git tag v0.2.0

@@ -1,3 +1,4 @@
+import org.jetbrains.changelog.Changelog
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.jetbrains.kotlin.gradle.dsl.KotlinVersion
@@ -5,6 +6,12 @@ import org.jetbrains.kotlin.gradle.dsl.KotlinVersion
 plugins {
     id("org.jetbrains.kotlin.jvm")
     id("org.jetbrains.intellij.platform")
+    id("org.jetbrains.changelog")
+}
+
+changelog {
+    version = providers.gradleProperty("version")
+    repositoryUrl = "https://github.com/kestra-io/jetbrains-kestra"
 }
 
 kotlin {
@@ -28,6 +35,17 @@ dependencies {
 intellijPlatform {
     pluginConfiguration {
         version = providers.gradleProperty("version")
+        // The IDE's What's New tab: the CHANGELOG.md section of this version, or Unreleased when it has none.
+        // A local variable, so the lambda does not capture the project, which the configuration cache rejects.
+        val changelog = project.changelog
+        changeNotes = providers.gradleProperty("version").map { version ->
+            with(changelog) {
+                renderItem(
+                    (getOrNull(version) ?: getUnreleased()).withHeader(false).withEmptySections(false),
+                    Changelog.OutputType.HTML,
+                )
+            }
+        }
         ideaVersion {
             sinceBuild = providers.gradleProperty("pluginSinceBuild")
             untilBuild = provider { null }
