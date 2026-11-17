@@ -32,9 +32,11 @@ Please do not create a public GitHub issue. If you have found a security issue, 
 | Command | Result |
 |---|---|
 | `./gradlew runIde` | Starts a sandbox IDE with the plugin loaded, for manual testing and debugging |
-| `./gradlew test` | Runs the tests (see below) |
+| `./gradlew runPyCharm` (`runWebStorm`, `runGoLand`) | The same sandbox in another IDE, at `latestPlatformVersion` |
+| `./gradlew test` | Runs the tests in IntelliJ IDEA at `platformVersion` (see below) |
+| `./gradlew testAllIdes` | Runs them again inside IntelliJ IDEA at `latestPlatformVersion` and PyCharm at both releases |
 | `./gradlew buildPlugin` | Builds the installable archive `build/distributions/jetbrains-kestra-<version>.zip` |
-| `./gradlew verifyPlugin` | Runs the JetBrains Plugin Verifier against the IDEs listed in `build.gradle.kts` (API compatibility). It downloads each IDE the first time |
+| `./gradlew verifyPlugin` | Runs the JetBrains Plugin Verifier against the IDEs of `verifyIdes` in `gradle.properties` (IntelliJ IDEA and PyCharm, here and in CI), at both releases (API compatibility). It downloads each IDE the first time, about 1 GB, 4 GB unpacked: `-PverifyIdes=GO` checks another one |
 
 The first build downloads the IntelliJ Platform, a few minutes. The sandbox IDE keeps its settings in `.intellijPlatform/sandbox`, so the instance URL and credentials you set there survive restarts.
 
@@ -57,6 +59,13 @@ To try the archive in your regular IDE: *Settings | Plugins | ⚙ | Install Plug
 
 `./gradlew test` runs unit tests and IntelliJ Platform tests against a fake Kestra server: validation, completion, schema, runs.
 
+The Plugin Verifier only checks API compatibility. Some failures only show once the plugin loads in a given IDE: in
+2026.x JCEF moved from the platform to a bundled plugin, and without a `<depends>` on it the topology view failed in
+PyCharm while the verifier reported the plugin as compatible. `testAllIdes` runs the suite inside the other IDEs, and
+`PluginDependenciesTest` fails when a class the plugin uses comes from a bundled plugin that `plugin.xml` does not
+declare. When the code starts using another bundled plugin, add one of its classes to that test. CI runs each IDE in
+its own job.
+
 `LiveKestraTest` runs against a real instance and is skipped unless `KESTRA_TEST_URL` is set. It creates flows in the `jetbrains.test` namespace and deletes them. To start a local instance and run it:
 
 ```shell
@@ -72,7 +81,7 @@ KESTRA_TEST_URL=http://localhost:18080 KESTRA_TEST_USERNAME=admin@kestra.io KEST
   ./gradlew test --tests 'io.kestra.jetbrains.LiveKestraTest'
 ```
 
-Run it against a 1.x image too (`kestra/kestra:v1.3.47` for example) when changing API calls: some routes differ between versions.
+Run it against a 1.x image too (`kestra/kestra:v1.3.47` for example) when changing API calls: some routes differ between versions. On an Enterprise Edition instance, also set `KESTRA_TEST_TENANT` to a tenant the user belongs to: without one, requests go to the `main` tenant.
 
 ## Release
 

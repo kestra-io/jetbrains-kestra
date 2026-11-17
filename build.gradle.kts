@@ -66,23 +66,76 @@ intellijPlatform {
         }
     }
 
-    // The lowest supported release and the latest one of IntelliJ IDEA, plus PyCharm and WebStorm,
-    // where data and frontend engineers write flows.
+    // API compatibility with every IDE of verifyIdes, at the lowest supported release and the latest one.
+    // -PverifyIdes=PY,WS narrows the list: CI checks one IDE per job, each download is about 1 GB.
     pluginVerification {
         ides {
-            create(IntelliJPlatformType.IntellijIdea, providers.gradleProperty("platformVersion"))
-            create(IntelliJPlatformType.IntellijIdea, providers.gradleProperty("latestPlatformVersion"))
-            create(IntelliJPlatformType.PyCharm, providers.gradleProperty("platformVersion"))
-            create(IntelliJPlatformType.WebStorm, providers.gradleProperty("platformVersion"))
+            // 2025.3, not 2025.3.6: each IDE numbers its bugfix releases differently (there is no GoLand 2025.3.6),
+            // and the first release of the line is the lowest one sinceBuild accepts.
+            val lowest = providers.gradleProperty("platformVersion").map { it.split('.').take(2).joinToString(".") }
+            providers.gradleProperty("verifyIdes").get().split(',').map(String::trim).filter(String::isNotEmpty).forEach { code ->
+                val type = IntelliJPlatformType.fromCode(code)
+                create(type, lowest)
+                create(type, providers.gradleProperty("latestPlatformVersion"))
+            }
         }
     }
 }
 
+// The test suite inside other IDEs than the one `test` uses (IntelliJ IDEA, lowest release). The Plugin Verifier
+// misses what only fails once the plugin loads, such as 2026.x moving JCEF to a bundled plugin.
+val testIdes = mapOf(
+    "testIdeaLatest" to (IntelliJPlatformType.IntellijIdea to "latestPlatformVersion"),
+    "testPyCharm" to (IntelliJPlatformType.PyCharm to "platformVersion"),
+    "testPyCharmLatest" to (IntelliJPlatformType.PyCharm to "latestPlatformVersion"),
+)
+
+// Sandbox IDEs with the plugin loaded, for manual QA outside IntelliJ IDEA (`runIde`), at the latest release.
+val runIdes = mapOf(
+    "runPyCharm" to IntelliJPlatformType.PyCharm,
+    "runWebStorm" to IntelliJPlatformType.WebStorm,
+    "runGoLand" to IntelliJPlatformType.GoLand,
+)
+
+intellijPlatformTesting {
+    testIdes.forEach { (name, target) ->
+        testIde.register(name) {
+            type = target.first
+            version = providers.gradleProperty(target.second)
+            plugins {
+                bundledPlugins("org.jetbrains.plugins.yaml", "com.intellij.modules.json")
+            }
+            testFramework(TestFrameworkType.Platform)
+            task {
+                kestraTestSettings()
+                // These tasks only get the instrumented test classes, not the test resources (graph.json…).
+                classpath += files(sourceSets.test.map { it.output.resourcesDir!! }).builtBy(tasks.processTestResources)
+            }
+        }
+    }
+    runIdes.forEach { (name, ide) ->
+        runIde.register(name) {
+            type = ide
+            version = providers.gradleProperty("latestPlatformVersion")
+        }
+    }
+}
+
+tasks.register("testAllIdes") {
+    group = "verification"
+    description = "Runs the tests inside every IDE of testIdes, plus the default test task."
+    dependsOn(tasks.test, testIdes.keys)
+}
+
 tasks.test {
+    kestraTestSettings()
+}
+
+fun Test.kestraTestSettings() {
     // Close to an IDE default heap: the instance flow schema is tens of MB.
     maxHeapSize = "2g"
     // Live-instance tests read these, see CONTRIBUTING.md.
-    listOf("KESTRA_TEST_URL", "KESTRA_TEST_USERNAME", "KESTRA_TEST_PASSWORD").forEach { name ->
+    listOf("KESTRA_TEST_URL", "KESTRA_TEST_USERNAME", "KESTRA_TEST_PASSWORD", "KESTRA_TEST_TENANT").forEach { name ->
         System.getenv(name)?.let { environment(name, it) }
     }
 }

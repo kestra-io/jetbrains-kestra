@@ -18,7 +18,8 @@ import io.kestra.jetbrains.settings.KestraCredentials
 import io.kestra.jetbrains.settings.KestraSettings
 import java.util.concurrent.TimeUnit
 
-// Runs against a real instance: KESTRA_TEST_URL, plus KESTRA_TEST_USERNAME / KESTRA_TEST_PASSWORD for basic auth.
+// Runs against a real instance: KESTRA_TEST_URL, plus KESTRA_TEST_USERNAME / KESTRA_TEST_PASSWORD for basic auth
+// and KESTRA_TEST_TENANT for an Enterprise Edition tenant.
 // Skipped when KESTRA_TEST_URL is not set. Creates flows in the jetbrains.test namespace and deletes them.
 class LiveKestraTest : BasePlatformTestCase() {
     private val url: String? = System.getenv("KESTRA_TEST_URL")
@@ -36,7 +37,7 @@ class LiveKestraTest : BasePlatformTestCase() {
     override fun setUp() {
         super.setUp()
         val url = url ?: return
-        KestraSettings.instance.update(url, "", "INFO")
+        KestraSettings.instance.update(url, System.getenv("KESTRA_TEST_TENANT").orEmpty(), "INFO")
         System.getenv("KESTRA_TEST_USERNAME")?.let { user ->
             KestraCredentials.set(url, KestraCredential(AuthKind.BASIC, user, System.getenv("KESTRA_TEST_PASSWORD").orEmpty()))
         }
