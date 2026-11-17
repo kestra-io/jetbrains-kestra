@@ -3,12 +3,14 @@ package io.kestra.jetbrains.settings
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.options.BoundConfigurable
 import com.intellij.openapi.ui.DialogPanel
+import com.intellij.openapi.ui.Messages
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.bindItem
 import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
 import io.kestra.jetbrains.actions.SignInAction
 import io.kestra.jetbrains.schema.KestraSchemaService
+import java.awt.Component
 
 // Settings | Tools | Kestra
 class KestraConfigurable : BoundConfigurable("Kestra") {
@@ -35,8 +37,16 @@ class KestraConfigurable : BoundConfigurable("Kestra") {
                         .comment("Leave empty for instances that do not use tenant-scoped API routes.")
                 }
                 row("Credentials:") {
-                    button("Sign In…") { SignInAction.signIn(null) }
-                        .comment("Stored in the IDE password safe, per instance URL. Apply a new URL before signing in.")
+                    button("Sign In…") { event ->
+                        // Sign in reads the saved URL, so the form is applied first. With no URL,
+                        // signIn would open this Settings dialog again, which does nothing while it is open.
+                        apply()
+                        if (settings.url.isBlank()) {
+                            Messages.showWarningDialog(event.source as Component, "Enter the instance URL first.", "Sign In to Kestra")
+                        } else {
+                            SignInAction.signIn(null)
+                        }
+                    }.comment("Stored in the IDE password safe, per instance URL. Signing in applies these settings.")
                 }
             }
             group("Runs") {
