@@ -67,7 +67,7 @@ intellijPlatform {
     }
 
     // API compatibility with every IDE of verifyIdes, at the lowest supported release and the latest one.
-    // -PverifyIdes=PY,WS narrows the list: CI checks one IDE per job, each download is about 1 GB.
+    // -PverifyIdes=GO checks another IDE. Local only: CI downloads no IDE but the one `test` builds against.
     pluginVerification {
         ides {
             // 2025.3, not 2025.3.6: each IDE numbers its bugfix releases differently (there is no GoLand 2025.3.6),
