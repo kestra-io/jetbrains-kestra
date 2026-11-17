@@ -1,6 +1,7 @@
 package io.kestra.jetbrains.settings
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.options.BoundConfigurable
 import com.intellij.openapi.ui.DialogPanel
 import com.intellij.openapi.ui.Messages
@@ -33,8 +34,17 @@ class KestraConfigurable : BoundConfigurable("Kestra") {
                         .comment("For example http://localhost:8080. The schema, validation and runs use this instance.")
                 }
                 row("Tenant:") {
-                    textField().bindText(::tenant)
-                        .comment("Leave empty for instances that do not use tenant-scoped API routes.")
+                    val field = textField().bindText(::tenant)
+                        .comment("Leave empty for instances that do not use tenant-scoped API routes. Signing in to an Enterprise Edition instance fills it.")
+                    // Sign in can pick the tenant while this page is open. Showing it here keeps OK from
+                    // writing the old value back, the field then differs from what was loaded.
+                    ApplicationManager.getApplication().messageBus.connect(disposable!!).subscribe(KestraSettings.TOPIC, KestraInstanceListener {
+                        ApplicationManager.getApplication().invokeLater({
+                            if (field.component.text.isBlank() && settings.tenant.isNotEmpty()) {
+                                field.component.text = settings.tenant
+                            }
+                        }, ModalityState.any())
+                    })
                 }
                 row("Credentials:") {
                     button("Sign In…") { event ->

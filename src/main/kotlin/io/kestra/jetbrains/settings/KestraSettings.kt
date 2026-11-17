@@ -31,6 +31,8 @@ class KestraSettings : SimplePersistentStateComponent<KestraSettingsState>(Kestr
             state.excludedNames = if (value == DEFAULT_EXCLUDED_NAMES) null else value.joinToString("\n")
         }
 
+    fun updateTenant(tenant: String) = update(url, tenant, logLevel)
+
     fun update(url: String, tenant: String, logLevel: String) {
         val changed = url.trim() != this.url || tenant.trim() != this.tenant
         state.url = url.trim().ifEmpty { null }

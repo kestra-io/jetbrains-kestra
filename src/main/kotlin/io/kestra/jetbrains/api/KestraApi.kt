@@ -194,6 +194,18 @@ class KestraApi {
     // authentication, so it would accept any password.
     fun verify(): ApiResponse = get("/flows/search?size=1", timeout = Duration.ofSeconds(10))
 
+    // The ids of the tenants the signed-in user belongs to, from the Enterprise Edition's /me. Null on
+    // instances without it (OSS, 1.x), which have no tenant to pick. Throws KestraUnauthorizedException.
+    fun tenants(): List<String>? {
+        val response = get("/me", tenantScoped = false, timeout = Duration.ofSeconds(10))
+        if (!response.ok) {
+            return null
+        }
+        val tenants = response.json()?.takeIf { it.isJsonObject }?.asJsonObject?.get("tenants")
+            ?.takeIf { it.isJsonArray }?.asJsonArray ?: return null
+        return tenants.mapNotNull { it.takeIf { e -> e.isJsonObject }?.asJsonObject?.get("id")?.takeIf { id -> id.isJsonPrimitive }?.asString }
+    }
+
     fun validate(source: String, timeout: Duration = Duration.ofSeconds(30)): List<ValidateResult>? {
         val response = postYaml("/flows/validate", source, timeout)
         return if (response.ok) ValidateResult.parse(response.json()) else null

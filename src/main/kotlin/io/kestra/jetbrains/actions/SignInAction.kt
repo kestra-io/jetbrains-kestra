@@ -3,6 +3,7 @@ package io.kestra.jetbrains.actions
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
@@ -54,7 +55,15 @@ class SignInAction : DumbAwareAction() {
                     KestraCredentials.set(url, credential)
                     KestraSettings.fireChanged()
                     try {
-                        KestraApi.instance.verify()
+                        if (KestraSettings.instance.tenant.isEmpty()) {
+                            pickTenant(project, KestraApi.instance.tenants().orEmpty())
+                        }
+                        val response = KestraApi.instance.verify()
+                        if (response.status == 403) {
+                            val tenant = KestraSettings.instance.tenant.ifEmpty { "the default tenant" }
+                            KestraNotifier.warn(project, "Signed in to Kestra at ${KestraApi.origin(url)}, but access to $tenant is denied: check the tenant in Settings | Tools | Kestra and the user's permissions.")
+                            return
+                        }
                         KestraNotifier.info(project, "Signed in to Kestra at ${KestraApi.origin(url)}.")
                         KestraSchemaService.instance.downloadQuietly()
                     } catch (e: KestraUnauthorizedException) {
@@ -65,6 +74,26 @@ class SignInAction : DumbAwareAction() {
                     }
                 }
             }.queue()
+        }
+
+        // With no tenant set, an Enterprise Edition instance routes requests to "main", which the user may not
+        // belong to. Uses their only tenant, or asks which one when they belong to several.
+        private fun pickTenant(project: Project?, tenants: List<String>) {
+            val tenant = when (tenants.size) {
+                0 -> return
+                1 -> tenants.single()
+                else -> {
+                    var chosen: String? = null
+                    // Any modality: sign in can start from the Settings dialog.
+                    ApplicationManager.getApplication().invokeAndWait({
+                        val dialog = TenantDialog(project, tenants)
+                        chosen = if (dialog.showAndGet()) dialog.tenant() else null
+                    }, ModalityState.any())
+                    chosen ?: return
+                }
+            }
+            KestraSettings.instance.updateTenant(tenant)
+            KestraNotifier.info(project, "Using the Kestra tenant \"$tenant\". Change it in Settings | Tools | Kestra.")
         }
     }
 }
@@ -112,6 +141,24 @@ private class SignInDialog(project: Project?, private val url: String, stored: K
     }
 
     fun credential() = KestraCredential(selectedKind(), username.text.trim(), String(secret.password).trim())
+}
+
+private class TenantDialog(project: Project?, tenants: List<String>) : DialogWrapper(project) {
+    private val tenant = ComboBox(tenants.toTypedArray())
+
+    init {
+        title = "Kestra Tenant"
+        init()
+    }
+
+    override fun createCenterPanel(): JComponent = FormBuilder.createFormBuilder()
+        .addComponent(JLabel("This user belongs to several tenants. Pick the one the IDE works with."))
+        .addLabeledComponent("Tenant:", tenant)
+        .panel
+
+    override fun getPreferredFocusedComponent(): JComponent = tenant
+
+    fun tenant() = tenant.selectedItem as String
 }
 
 class SignOutAction : DumbAwareAction() {
