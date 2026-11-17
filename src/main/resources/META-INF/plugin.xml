@@ -19,6 +19,8 @@
     <depends>com.intellij.modules.platform</depends>
     <depends>org.jetbrains.plugins.yaml</depends>
     <depends>com.intellij.modules.json</depends>
+    <!-- The topology and documentation views. Part of the platform up to 2025.3, a bundled plugin from 2026.x on. -->
+    <depends>com.intellij.modules.jcef</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <applicationConfigurable parentId="tools" instance="io.kestra.jetbrains.settings.KestraConfigurable"
