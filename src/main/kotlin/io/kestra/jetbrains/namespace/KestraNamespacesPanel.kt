@@ -38,6 +38,7 @@ import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.EditSourceOnDoubleClickHandler
 import com.intellij.util.ui.tree.TreeUtil
 import io.kestra.jetbrains.KestraNotifier
+import io.kestra.jetbrains.api.KestraApiException
 import io.kestra.jetbrains.api.KestraUnauthorizedException
 import io.kestra.jetbrains.api.NamespaceFilesApi
 import io.kestra.jetbrains.settings.KestraInstanceListener
@@ -240,6 +241,9 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
         val path = NamespacePaths.join(parent.relativePath, name)
         val template = flowTemplate(name.removeSuffix(".yml"), parent.namespace)
         background("Creating ${parent.namespace}$path", {
+            // Asked to the instance: the tree only knows the folders that were expanded, and the server
+            // overwrites an existing file, or replaces an existing flow, without a word.
+            if (exists(parent, name, flow)) throw KestraApiException("${parent.namespace}$path already exists")
             when {
                 flow -> NamespaceFilesApi().saveFlow(parent.namespace, name.removeSuffix(".yml"), template)
                 directory -> NamespaceFilesApi().createDirectory(parent.namespace, path)
@@ -251,6 +255,12 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
             rebuild(parent)
             if (!directory) OpenFileDescriptor(project, created).navigate(true)
         }
+    }
+
+    private fun exists(parent: KestraVirtualFile, name: String, flow: Boolean): Boolean {
+        val api = NamespaceFilesApi()
+        return if (flow) name.removeSuffix(".yml") in api.flowIds(parent.namespace)
+        else api.list(parent.namespace, parent.relativePath).any { it.name == name }
     }
 
     internal fun rename() {
@@ -358,7 +368,7 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
                     item.isRoot -> {
                         icon = AllIcons.Nodes.Module
                         append(item.namespace, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
-                        append("  ${item.instance}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                        append("  ${KestraFileSystem.describe(item.instance)}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     }
                     item.isDirectory && item.fileSystem.isFlowsFolder(item) -> {
                         icon = AllIcons.Nodes.ConfigFolder

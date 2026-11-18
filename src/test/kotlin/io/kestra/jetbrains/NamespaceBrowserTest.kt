@@ -15,6 +15,7 @@ import io.kestra.jetbrains.namespace.KestraNamespacesPanel
 import io.kestra.jetbrains.settings.KestraSettings
 import io.kestra.jetbrains.vfs.KestraFileSystem
 import io.kestra.jetbrains.vfs.KestraVirtualFile
+import io.kestra.jetbrains.vfs.NamespaceSaver
 import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.swing.tree.DefaultMutableTreeNode
@@ -132,6 +133,57 @@ class NamespaceBrowserTest : KestraTestCase() {
         assertTrue(notification.content, notification.content.contains("Missing NAMESPACE UPDATE permission"))
         assertEquals(listOf("Retry"), notification.actions.map { it.templateText })
         assertEquals("x", stored["/locked.txt"])
+
+        // The refused edit is not replaced by the instance's version when the folder is listed again.
+        assertTrue(NamespaceSaver.instance.hasUnsyncedChanges(locked))
+        KestraFileSystem.instance.list(KestraFileSystem.instance.root(instance, "company.team"))
+        assertEquals("y", String(locked.contentsToByteArray()))
+    }
+
+    fun testNewFileDoesNotOverwriteAFileOfAFolderNeverExpanded() {
+        val panel = KestraNamespacesPanel(project)
+        Disposer.register(testRootDisposable, panel)
+        panel.open("company.team")
+        waitFor { "scripts" in rows(panel) }
+        select(panel, "scripts")
+        TestDialogManager.setTestInputDialog(TestInputDialog { "run.py" })
+        panel.create(directory = false)
+        waitFor { kestra.requests.any { it.method == "GET" && it.path.startsWith("/namespaces/company.team/files/directory?path=/scripts") } }
+        Thread.sleep(300)
+        PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+
+        assertEquals("print(1)", stored["/scripts/run.py"])
+        assertTrue(kestra.requests.none { it.method == "POST" && it.path.startsWith("/namespaces/company.team/files") })
+    }
+
+    fun testInstanceIsTheWholeApiBaseAndTheTenant() {
+        fun instanceOf(url: String, tenant: String = ""): String {
+            KestraSettings.instance.update(url, tenant, "INFO")
+            return KestraFileSystem.currentInstance()!!
+        }
+        val prod = instanceOf("https://x.example/prod")
+        val staging = instanceOf("https://x.example/staging")
+        assertFalse(prod == staging)
+        assertFalse(prod.contains('/'))
+        assertEquals("https://x.example/prod/api/v1", KestraFileSystem.describe(prod))
+        assertEquals("https://x.example/prod/api/v1 (tenant acme)", KestraFileSystem.describe(instanceOf("https://x.example/prod", "acme")))
+
+        // A URL built from it resolves to the same folder.
+        val root = KestraFileSystem.instance.root(prod, "company.team")
+        assertSame(root, VirtualFileManager.getInstance().findFileByUrl("kestra://$prod/company.team"))
+        assertEquals("company.team on https://x.example/prod/api/v1", root.location)
+    }
+
+    fun testFileReadOnTheUiThreadDoesNotWaitForASlowInstance() {
+        kestra.handle("GET", "/namespaces/company.team/files") { exchange, _ ->
+            Thread.sleep(6_000)
+            FakeKestra.respond(exchange, 200, "late")
+        }
+        val file = VirtualFileManager.getInstance().findFileByUrl("kestra://$instance/company.team/slow.txt") as KestraVirtualFile
+        val start = System.currentTimeMillis()
+        val error = runCatching { file.contentsToByteArray() }.exceptionOrNull()
+        assertTrue(error.toString(), error is IOException && error.message!!.contains("still loading"))
+        assertTrue(System.currentTimeMillis() - start < 5_000)
     }
 
     fun testExcludedFoldersAreHiddenAndFilesOfAnotherInstanceAreNotListed() {
@@ -186,6 +238,16 @@ class NamespaceBrowserTest : KestraTestCase() {
         panel.create(directory = false)
         waitFor { "created.yml" in rows(panel) }
         assertTrue(flows["created"]!!.startsWith("id: created\nnamespace: company.team\n"))
+
+        // An existing flow is not replaced by a template.
+        val listings = { kestra.requests.count { it.method == "GET" && it.path == "/flows/company.team" } }
+        val before = listings()
+        select(panel, "hello.yml")
+        TestInputDialog { "hello.yml" }.let { TestDialogManager.setTestInputDialog(it) }
+        panel.create(directory = false)
+        waitFor { listings() > before }
+        Thread.sleep(300)
+        assertTrue(flows["hello"]!!.contains("# edited"))
 
         select(panel, "hello.yml")
         TestDialogManager.setTestDialog(TestDialog.OK)

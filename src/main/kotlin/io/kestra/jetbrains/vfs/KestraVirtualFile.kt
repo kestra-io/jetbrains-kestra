@@ -1,15 +1,22 @@
 package io.kestra.jetbrains.vfs
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.util.LocalTimeCounter
+import com.intellij.util.concurrency.AppExecutorUtil
 import io.kestra.jetbrains.namespace.NamespacePaths
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 // A file or folder of a namespace on an instance. Its content lives in memory, never on disk: it is
 // read from the instance on first access, and a save keeps the new content and uploads it in the background.
+// The content is kept until the upload succeeded, see NamespaceSaver.
 class KestraVirtualFile internal constructor(
     private val fs: KestraFileSystem,
     val instance: String,
@@ -28,6 +35,7 @@ class KestraVirtualFile internal constructor(
     @Volatile internal var loadedChildren: List<KestraVirtualFile>? = null
     @Volatile internal var valid = true
     @Volatile private var stamp = LocalTimeCounter.currentTime()
+    @Volatile private var loading: CompletableFuture<ByteArray>? = null
 
     val isRoot: Boolean get() = relativePath == "/"
 
@@ -42,8 +50,8 @@ class KestraVirtualFile internal constructor(
 
     override fun getPath(): String = "$instance/$namespace" + if (isRoot) "" else relativePath
 
-    // namespace/path on host:port, for messages and titles.
-    val location: String get() = "$namespace${if (isRoot) "" else relativePath} on $instance"
+    // namespace/path on the instance, for messages and titles.
+    val location: String get() = "$namespace${if (isRoot) "" else relativePath} on ${KestraFileSystem.describe(instance)}"
 
     override fun isWritable(): Boolean = !directory
 
@@ -57,7 +65,34 @@ class KestraVirtualFile internal constructor(
 
     override fun contentsToByteArray(): ByteArray {
         if (directory) throw IOException("$location is a folder")
-        return content ?: fs.read(this).also { content = it }
+        content?.let { return it }
+        // A tab restored at startup is read by the editor on the EDT or under a read action, where a slow
+        // instance must not hold the IDE: wait a short while for the read, then give up. It keeps running, so
+        // the file opens from the Namespaces tool window once it landed.
+        val app = ApplicationManager.getApplication()
+        if (!app.isDispatchThread && !app.isReadAccessAllowed) return fs.read(this).also { content = it }
+        try {
+            return prefetch().get(UI_THREAD_WAIT_SECONDS, TimeUnit.SECONDS)
+        } catch (e: TimeoutException) {
+            throw IOException("$location is still loading from the instance. Open it again from the Kestra Namespaces tool window.")
+        } catch (e: ExecutionException) {
+            throw (e.cause as? IOException) ?: IOException(e.cause?.message, e.cause)
+        }
+    }
+
+    // Starts reading the content in the background, once.
+    internal fun prefetch(): CompletableFuture<ByteArray> {
+        loading?.let { return it }
+        return synchronized(this) {
+            loading ?: CompletableFuture.supplyAsync({ fs.read(this) }, AppExecutorUtil.getAppExecutorService()).also { future ->
+                loading = future
+                future.whenComplete { bytes, _ ->
+                    // A save or a newer listing may have set the content meanwhile.
+                    if (bytes != null && content == null) content = bytes
+                    loading = null
+                }
+            }
+        }
     }
 
     override fun getInputStream(): InputStream = contentsToByteArray().inputStream()
@@ -85,7 +120,7 @@ class KestraVirtualFile internal constructor(
         postRunnable?.run()
     }
 
-    internal fun touch() {
-        stamp = LocalTimeCounter.currentTime()
+    private companion object {
+        const val UI_THREAD_WAIT_SECONDS = 3L
     }
 }

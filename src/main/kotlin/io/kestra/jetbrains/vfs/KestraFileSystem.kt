@@ -10,10 +10,11 @@ import io.kestra.jetbrains.api.NamespaceFilesApi
 import io.kestra.jetbrains.namespace.NamespacePaths
 import io.kestra.jetbrains.settings.KestraSettings
 import java.io.IOException
+import java.net.URLDecoder
 import java.util.concurrent.ConcurrentHashMap
 
 // kestra://<instance>/<namespace>/<path>: the namespace files of an instance, as the IDE's editors see them.
-// The instance is part of the URL, so a file opened from one instance is never written to another one
+// The instance is the encoded API base plus the tenant, see currentInstance. It is part of the URL, so a file opened from one instance is never written to another one
 // after the settings change. Changes go through the Kestra Namespaces tool window, which calls the
 // instance first and then updates this model.
 class KestraFileSystem : DeprecatedVirtualFileSystem() {
@@ -26,7 +27,8 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
     override fun getProtocol() = PROTOCOL
 
     // Also called to reopen editor tabs on startup, before anything was listed: the file is created
-    // from its path and read on first access.
+    // from its path and read on first access. The read starts right away in the background, so it is
+    // usually done when the editor asks for the content.
     override fun findFileByPath(path: String): VirtualFile? {
         files[path]?.let { return it }
         val segments = path.trim('/').split('/')
@@ -35,6 +37,7 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
         for ((index, name) in segments.drop(2).withIndex()) {
             current = child(current, name, directory = index < segments.size - 3)
         }
+        if (!current.isDirectory && !current.hasContent) current.prefetch()
         return current
     }
 
@@ -66,8 +69,8 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
         }
         val children = entries.sortedWith(compareBy({ !it.directory }, { it.name.lowercase() })).map { entry ->
             child(dir, entry.name, entry.directory).also {
-                // A file changed on the instance is read again, unless it has a save in flight.
-                if ((it.modified != entry.modified || isFlowsFolder(dir)) && !NamespaceSaver.instance.isPending(it)) it.content = null
+                // A file changed on the instance is read again, unless it holds changes the instance has not accepted.
+                if ((it.modified != entry.modified || isFlowsFolder(dir)) && !NamespaceSaver.instance.hasUnsyncedChanges(it)) it.content = null
                 it.size = entry.size
                 it.modified = entry.modified
             }
@@ -127,14 +130,21 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
     fun flowId(file: KestraVirtualFile) = file.name.substringBeforeLast('.')
 
     private fun forget(file: KestraVirtualFile) {
-        files.entries.removeIf { (key, known) -> (key == file.path || key.startsWith(file.path + "/")).also { if (it) known.valid = false } }
+        files.entries.removeIf { (key, known) ->
+            (key == file.path || key.startsWith(file.path + "/")).also {
+                if (it) {
+                    known.valid = false
+                    NamespaceSaver.instance.discard(known)
+                }
+            }
+        }
     }
 
     // The instance a file belongs to must still be the configured one.
     private fun api(file: KestraVirtualFile): NamespaceFilesApi {
         val current = currentInstance()
         if (file.instance != current) {
-            throw IOException("${file.location} belongs to ${file.instance}, but the IDE is now connected to ${current ?: "no instance"}. Open it again from the Kestra Namespaces tool window.")
+            throw IOException("${file.location} belongs to ${describe(file.instance)}, but the IDE is now connected to ${current?.let(::describe) ?: "no instance"}. Open it again from the Kestra Namespaces tool window.")
         }
         return NamespaceFilesApi()
     }
@@ -163,17 +173,26 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
         const val PROTOCOL = "kestra"
         const val FLOWS = "_flows"
 
-        // The VS Code extension refuses these too: tools would otherwise write their metadata to the namespace.
+        // Tools would otherwise write their metadata to the namespace. The VS Code extension hides only .git and
+        // .vscode; .idea is hidden here for the same reason, as this IDE's own folder.
         val HIDDEN = setOf(".git", ".vscode", ".idea")
 
         val instance: KestraFileSystem get() = VirtualFileManager.getInstance().getFileSystem(PROTOCOL) as KestraFileSystem
 
-        // host:port of the configured instance, plus ~tenant on a multi-tenant one.
+        // The configured API base, with the tenant on a multi-tenant instance, as one URL segment. The whole
+        // base, not only host:port: https://x/prod and https://x/staging are two instances. "~" separates the
+        // tenant, so the one in the base is escaped.
         fun currentInstance(): String? {
             val settings = KestraSettings.instance
             val base = KestraUrls.apiBase(settings.url).ifEmpty { return null }
-            val host = base.substringAfter("://").substringBefore('/')
-            return host + settings.tenant.takeIf { it.isNotEmpty() }?.let { "~$it" }.orEmpty()
+            return KestraUrls.segment(base).replace("~", "%7E") + settings.tenant.takeIf { it.isNotEmpty() }?.let { "~" + KestraUrls.segment(it) }.orEmpty()
+        }
+
+        // The instance of a path, as the user typed it: "https://x/prod/api/v1" or "... (tenant)".
+        fun describe(instance: String): String {
+            fun decode(value: String) = URLDecoder.decode(value, Charsets.UTF_8)
+            val tenant = instance.substringAfter('~', "")
+            return decode(instance.substringBefore('~')) + if (tenant.isEmpty()) "" else " (tenant ${decode(tenant)})"
         }
     }
 }
