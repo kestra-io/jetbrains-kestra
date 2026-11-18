@@ -5,6 +5,7 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
+import io.kestra.jetbrains.api.ApiResponse
 import io.kestra.jetbrains.api.KestraApi
 import io.kestra.jetbrains.settings.KestraInstanceListener
 import io.kestra.jetbrains.settings.KestraSettings
@@ -84,15 +85,24 @@ class PluginIcons : Disposable {
             return if (response.ok) response.json().icon(type, nested = true) else null
         }
         // Plugin types and plugin groups have separate indexes on 1.x.
+        val started = generation
         val all = index ?: synchronized(this) {
             index ?: JsonObject().also { merged ->
                 listOf(api.pluginIcons(), api.get("/plugins/icons/groups", tenantScoped = false, timeout = java.time.Duration.ofSeconds(60)))
-                    .mapNotNull { response -> response.takeIf { it.ok }?.json()?.takeIf { it.isJsonObject }?.asJsonObject }
+                    .mapNotNull(::indexOf)
                     .forEach { json -> json.entrySet().forEach { (key, value) -> merged.add(key, value) } }
-                index = merged
+                // Not kept when the instance changed meanwhile: it is the old instance's index.
+                if (started == generation) index = merged
             }
         }
         return all.icon(type, nested = false)
+    }
+
+    // As on 2.x, an error says nothing about the icons: it fails, and the index is built again later instead of
+    // staying empty. A 404 is an instance without that index.
+    private fun indexOf(response: ApiResponse): JsonObject? {
+        check(response.ok || response.status == 404) { "HTTP ${response.status}" }
+        return response.takeIf { it.ok }?.json()?.takeIf { it.isJsonObject }?.asJsonObject
     }
 
     // 2.0+ answers {"icon": {"icon": "<base64>"}}, the 1.x index {"<type>": {"icon": "<base64>"}}.

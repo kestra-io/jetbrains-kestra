@@ -182,6 +182,51 @@ class TopologyTest : KestraTestCase() {
         assertTrue(kestra.requests.none { it.path.startsWith("/plugins/icons/") && it.path != "/plugins/icons/groups" })
     }
 
+    // A server error on the 1.x index used to be dropped and an empty index kept for the life of the instance.
+    fun testKestra1IconIndexIsBuiltAgainAfterAServerError() {
+        kestra.json("GET", "/configs") { """{"version":"1.3.47"}""" }
+        KestraSettings.fireChanged()
+        val healthy = java.util.concurrent.atomic.AtomicBoolean(false)
+        kestra.handle("GET", "/plugins/icons") { exchange, _ ->
+            if (healthy.get()) FakeKestra.respond(exchange, 200, """{"a.A":{"icon":"QQ=="},"b.B":{"icon":"Qg=="}}""")
+            else FakeKestra.respond(exchange, 503, "{}")
+        }
+        val icons = PluginIcons.instance
+        assertTrue(icons.icons(listOf("a.A")).isEmpty())
+
+        // Another type, so the cooldown of the first one does not hide the result.
+        healthy.set(true)
+        assertEquals(mapOf("b.B" to "data:image/svg+xml;base64,Qg=="), icons.icons(listOf("b.B")))
+    }
+
+    // A fetch of the old instance that ends after the settings changed must not leave its index behind.
+    fun testKestra1IconIndexOfAPreviousInstanceIsNotKept() {
+        kestra.json("GET", "/configs") { """{"version":"1.3.47"}""" }
+        KestraSettings.fireChanged()
+        val requested = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        kestra.handle("GET", "/plugins/icons") { exchange, _ ->
+            requested.countDown()
+            release.await(30, java.util.concurrent.TimeUnit.SECONDS)
+            FakeKestra.respond(exchange, 200, """{"a.A":{"icon":"QQ=="},"b.B":{"icon":"Qg=="}}""")
+        }
+        // Captures the types: a lambda capturing nothing compiles to a no-argument method named test…, which JUnit 3 takes for a test.
+        val types = listOf("a.A")
+        val first = Thread { PluginIcons.instance.icons(types) }.also { it.start() }
+        try {
+            assertTrue(requested.await(30, java.util.concurrent.TimeUnit.SECONDS))
+            KestraSettings.fireChanged()
+            release.countDown()
+            first.join(30_000)
+        } finally {
+            release.countDown()
+        }
+        assertEquals(1, kestra.requests.count { it.path == "/plugins/icons" })
+
+        assertEquals(mapOf("b.B" to "data:image/svg+xml;base64,Qg=="), PluginIcons.instance.icons(listOf("b.B")))
+        assertEquals(2, kestra.requests.count { it.path == "/plugins/icons" })
+    }
+
     fun testNoticesWhenNotAFlowOrNotSignedIn() {
         kestra.json("POST", "/flows/graph", status = 401) { "{}" }
         myFixture.configureByText("compose.yml", "services:\n  web: {}\n")
