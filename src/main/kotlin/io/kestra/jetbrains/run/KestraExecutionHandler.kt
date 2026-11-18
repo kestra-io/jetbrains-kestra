@@ -164,6 +164,7 @@ class KestraExecutionHandler(
             api.createExecution(flow.namespace, flow.id, inputs)
         } catch (e: KestraApiException) {
             if (!abandoned) throw e
+            model.phase("Stopped: the instance did not answer")
             model.error("Stopped without an answer from the instance to the execution request: the execution may still have been created, check the instance.")
             model.state("UNKNOWN")
             return 1

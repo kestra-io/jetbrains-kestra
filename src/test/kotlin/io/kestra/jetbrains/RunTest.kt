@@ -130,8 +130,9 @@ class RunTest : KestraTestCase() {
             val (handler, output) = startAndStopDuringCreation(never, java.time.Duration.ofMillis(100))
             // Terminates while the instance still holds the request: the handler does not wait for it.
             waitUntil { handler.isProcessTerminated }
-            assertEquals(1L, never.count)
             assertTrue(output.text(), output.text().contains("Stopped without an answer from the instance"))
+            // The phase left "Stopping: waiting…", which would otherwise stay on screen next to the final state.
+            assertEquals("Stopped: the instance did not answer", output.text().lines().last { it.startsWith("Stopp") })
             assertTrue(output.text(), output.text().contains("State UNKNOWN"))
             assertTrue(kestra.requests.none { it.method == "DELETE" })
         } finally {
