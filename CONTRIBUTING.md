@@ -53,7 +53,11 @@ To try the archive in your regular IDE: *Settings | Plugins | ⚙ | Install Plug
 | `validation` | Live validation through the instance's validate endpoint |
 | `completion` | `{{ }}` completion |
 | `run` | *Kestra flow* run configuration, inputs dialog, execution streaming |
-| `actions` | Sign in, sign out, download schema, save flow |
+| `actions` | Sign in, sign out, download schema, save flow, open and upload namespace files |
+| `topology` | Flow topology preview in the embedded browser, plugin icons |
+| `docs` | Kestra documentation in the embedded browser, fed by the instance |
+| `namespace` | *Kestra Namespaces* tool window: browse, create, rename, delete and upload namespace files |
+| `vfs` | The `kestra://` file system that opens namespace files in the editor, and their background upload |
 
 ### Tests
 
@@ -65,8 +69,9 @@ PyCharm while the verifier reported the plugin as compatible. `testAllIdes` runs
 `PluginDependenciesTest` fails when a class the plugin uses comes from a bundled plugin that `plugin.xml` does not
 declare. When the code starts using another bundled plugin, add one of its classes to that test.
 
-CI only runs `check`: each IDE is a large download, so `testAllIdes` and `verifyPlugin` are run locally, before a
-release and after changing `plugin.xml`, the dependencies or the supported versions.
+The PR checks only run `check`: each IDE is a large download, so `testAllIdes` and `verifyPlugin` are run locally after
+changing `plugin.xml`, the dependencies or the supported versions. The release workflow runs `verifyPlugin`, so a version
+the verifier rejects is not published.
 
 `LiveKestraTest` runs against a real instance and is skipped unless `KESTRA_TEST_URL` is set. It creates flows in the `jetbrains.test` namespace and deletes them. To start a local instance and run it:
 
@@ -119,6 +124,6 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-The [Release](.github/workflows/release.yml) workflow runs the tests, builds and signs the plugin with the tag's version, publishes it to the Marketplace, and creates the GitHub release with the signed archive attached for offline installation. Each upload goes through the Marketplace's review before it reaches users.
+The [Release](.github/workflows/release.yml) workflow runs the tests and the Plugin Verifier, builds and signs the plugin with the tag's version, publishes it to the Marketplace, and creates the GitHub release with the signed archive attached for offline installation. Each upload goes through the Marketplace's review before it reaches users.
 
 A tag with a pre-release suffix, such as `v0.2.0-beta.1`, is published to the `beta` channel and marked as a pre-release on GitHub.

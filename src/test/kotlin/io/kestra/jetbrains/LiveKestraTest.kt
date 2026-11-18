@@ -2,6 +2,7 @@ package io.kestra.jetbrains
 
 import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.process.ProcessListener
+import com.intellij.testFramework.JUnit38AssumeSupportRunner
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import io.kestra.jetbrains.api.FormPart
@@ -16,25 +17,22 @@ import io.kestra.jetbrains.settings.AuthKind
 import io.kestra.jetbrains.settings.KestraCredential
 import io.kestra.jetbrains.settings.KestraCredentials
 import io.kestra.jetbrains.settings.KestraSettings
+import org.junit.Assume
+import org.junit.runner.RunWith
 import java.util.concurrent.TimeUnit
 
 // Runs against a real instance: KESTRA_TEST_URL, plus KESTRA_TEST_USERNAME / KESTRA_TEST_PASSWORD for basic auth
 // and KESTRA_TEST_TENANT for an Enterprise Edition tenant.
 // Skipped when KESTRA_TEST_URL is not set. Creates flows in the jetbrains.test namespace and deletes them.
+@RunWith(JUnit38AssumeSupportRunner::class)
 class LiveKestraTest : BasePlatformTestCase() {
     private val url: String? = System.getenv("KESTRA_TEST_URL")
     private val api get() = KestraApi.instance
     private val created = mutableListOf<String>()
 
-    override fun runTestRunnable(testRunnable: com.intellij.util.ThrowableRunnable<Throwable>) {
-        if (url.isNullOrBlank()) {
-            println("LiveKestraTest skipped: KESTRA_TEST_URL is not set")
-            return
-        }
-        super.runTestRunnable(testRunnable)
-    }
-
+    // Reported as skipped, not passed, when there is no instance to run against.
     override fun setUp() {
+        Assume.assumeTrue("KESTRA_TEST_URL is not set", !url.isNullOrBlank())
         super.setUp()
         val url = url ?: return
         KestraSettings.instance.update(url, System.getenv("KESTRA_TEST_TENANT").orEmpty(), "INFO")
@@ -45,6 +43,8 @@ class LiveKestraTest : BasePlatformTestCase() {
     }
 
     override fun tearDown() {
+        // setUp stopped before the fixture was built: there is nothing to tear down.
+        if (url.isNullOrBlank()) return
         try {
             created.forEach { runCatching { api.request("DELETE", "/flows/jetbrains.test/${KestraUrls.segment(it)}") } }
             url?.let(KestraCredentials::clear)
