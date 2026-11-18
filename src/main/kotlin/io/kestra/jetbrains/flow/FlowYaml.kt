@@ -1,8 +1,11 @@
 package io.kestra.jetbrains.flow
 
+import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiFileFactory
 import com.intellij.psi.PsiFile
 import com.intellij.psi.util.PsiTreeUtil
+import org.jetbrains.yaml.YAMLLanguage
 import org.jetbrains.yaml.psi.YAMLFile
 import org.jetbrains.yaml.psi.YAMLKeyValue
 import org.jetbrains.yaml.psi.YAMLMapping
@@ -30,6 +33,11 @@ object FlowYaml {
         @Suppress("UNCHECKED_CAST")
         return (toValue(root(file)) as? Map<String, Any?>)?.let(::Flow)
     }
+
+    // The flow in a text that is not a PSI file yet, such as the current content of a document: a PSI that
+    // is not committed may still describe an older text.
+    fun parse(project: Project, source: String): Flow? =
+        flow(PsiFileFactory.getInstance(project).createFileFromText("flow.yml", YAMLLanguage.INSTANCE, source))
 
     // The plugin type of the innermost mapping around the offset that declares one: a task, a trigger,
     // a condition or a task runner. Null outside of any.

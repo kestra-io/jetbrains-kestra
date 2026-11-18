@@ -2,6 +2,8 @@ package io.kestra.jetbrains.api
 
 import com.google.gson.JsonElement
 import com.google.gson.JsonParser
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.util.net.JdkProxyProvider
@@ -62,7 +64,7 @@ class SseStream(private val lines: Stream<String>) : AutoCloseable {
 const val YAML_CONTENT_TYPE = "application/x-yaml"
 
 @Service(Service.Level.APP)
-class KestraApi {
+class KestraApi : Disposable {
     @Volatile
     private var cachedVersion: Pair<String, String?>? = null
 
@@ -80,9 +82,11 @@ class KestraApi {
     }
 
     init {
-        com.intellij.openapi.application.ApplicationManager.getApplication().messageBus.connect()
+        ApplicationManager.getApplication().messageBus.connect(this)
             .subscribe(KestraSettings.TOPIC, KestraInstanceListener { cachedVersion = null })
     }
+
+    override fun dispose() = Unit
 
     val settings: KestraSettings get() = KestraSettings.instance
 
@@ -165,7 +169,6 @@ class KestraApi {
         return SseStream(response.body())
     }
 
-    // The instance version, or null if it can't be read.
     // The client carries the IDE's authenticator for proxies, and with one set the JDK turns an unanswered
     // 401 challenge into an IOException instead of returning the response.
     private fun failure(url: String, e: IOException): KestraApiException =
@@ -175,6 +178,7 @@ class KestraApi {
             KestraUnreachableException(origin(url), e)
         }
 
+    // The instance version, or null if it can't be read.
     fun version(): String? {
         val url = settings.url
         cachedVersion?.takeIf { it.first == url }?.let { return it.second }
@@ -228,32 +232,44 @@ class KestraApi {
         if (inputs.isEmpty()) {
             return request("POST", path)
         }
-        val multipart = Multipart.build(inputs)
-        return request("POST", path, body = BodyPublishers.ofByteArray(multipart.bytes), contentType = multipart.contentType)
+        // FILE inputs are streamed from disk, never held in memory.
+        val multipart = Multipart.stream(inputs)
+        return request("POST", path, body = multipart.body, contentType = multipart.contentType, timeout = Duration.ofMinutes(10))
     }
 
     fun execution(executionId: String): ApiResponse = get("/executions/${KestraUrls.segment(executionId)}")
 
-    // The kill route moved under /actions in Kestra 2.0.
+    // The kill route moved under /actions in Kestra 2.0. With the version unknown (/configs failed), try the
+    // 2.x route and fall back to the 1.x one on a 404.
     fun killExecution(executionId: String): ApiResponse {
-        val action = if ((majorVersion() ?: 2) >= 2) "actions/kill" else "kill"
-        return request("DELETE", "/executions/${KestraUrls.segment(executionId)}/$action")
+        val routes = when (val major = majorVersion()) {
+            null -> listOf("actions/kill", "kill")
+            else -> listOf(if (major >= 2) "actions/kill" else "kill")
+        }
+        var response = request("DELETE", "/executions/${KestraUrls.segment(executionId)}/${routes.first()}")
+        for (route in routes.drop(1)) {
+            if (response.status != 404) break
+            response = request("DELETE", "/executions/${KestraUrls.segment(executionId)}/$route")
+        }
+        return response
     }
 
     fun followExecution(executionId: String) = stream("/executions/${KestraUrls.segment(executionId)}/follow")
 
-    fun followLogs(executionId: String, minLevel: String) =
-        stream("/logs/${KestraUrls.segment(executionId)}/follow?minLevel=${KestraUrls.segment(minLevel)}")
+    // Everything is requested and the view filters by level. The parameter is only needed up to 2.0, newer
+    // servers ignore it.
+    fun followLogs(executionId: String) = stream("/logs/${KestraUrls.segment(executionId)}/follow?minLevel=TRACE")
 
-    // The plugin schema endpoint is global, not tenant-scoped.
     // The flow's topology as the Kestra UI draws it: nodes, edges and clusters.
     fun flowGraph(source: String): ApiResponse = postYaml("/flows/graph", source)
 
     // 2.0+ serves one icon per class; 1.x only the full index, with the icon bytes inline. Not tenant-scoped.
-    fun pluginIcon(type: String): ApiResponse = get("/plugins/icons/${KestraUrls.segment(type)}", tenantScoped = false)
+    fun pluginIcon(type: String): ApiResponse =
+        get("/plugins/icons/${KestraUrls.segment(type)}", tenantScoped = false, timeout = Duration.ofSeconds(10))
 
     fun pluginIcons(): ApiResponse = get("/plugins/icons", tenantScoped = false, timeout = Duration.ofSeconds(60))
 
+    // The plugin schema endpoint is global, not tenant-scoped.
     fun flowSchema(): ApiResponse = get("/plugins/schemas/flow", tenantScoped = false, timeout = Duration.ofSeconds(120))
 
     private fun builder(url: String, timeout: Duration?): HttpRequest.Builder {

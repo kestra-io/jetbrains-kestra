@@ -9,7 +9,6 @@ import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFileManager
-import com.intellij.psi.PsiFileFactory
 import com.intellij.util.concurrency.AppExecutorUtil
 import io.kestra.jetbrains.KestraNotifier
 import io.kestra.jetbrains.api.FormPart
@@ -22,12 +21,12 @@ import io.kestra.jetbrains.flow.Flow
 import io.kestra.jetbrains.flow.FlowYaml
 import io.kestra.jetbrains.topology.KestraTopologyService
 import com.intellij.openapi.components.serviceIfCreated
-import org.jetbrains.yaml.YAMLLanguage
 import java.io.OutputStream
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 // Validates, deploys and runs a flow, then streams the execution into the run view's model.
 // Stop kills the execution on the instance.
@@ -44,6 +43,7 @@ class KestraExecutionHandler(
     @Volatile private var executionId: String? = null
     @Volatile private var flowUid = ""
     @Volatile private var stopped = false
+    private val killSent = AtomicBoolean(false)
 
     override fun startNotify() {
         super.startNotify()
@@ -55,16 +55,23 @@ class KestraExecutionHandler(
         ApplicationManager.getApplication().executeOnPooledThread {
             val id = executionId
             if (id == null) {
+                // Nothing to kill yet: run() kills the execution if its id arrives after this.
                 closeStreams()
                 return@executeOnPooledThread
             }
-            model.phase("Killing execution $id…")
-            runCatching { api.killExecution(id) }
-                .onSuccess { if (!it.ok) model.error("Kill failed (HTTP ${it.status}): ${it.message()}") }
-                .onFailure { model.error("Kill failed: ${it.message}") }
+            kill(id)
             // The follow stream reports KILLED and closes; don't wait forever if it doesn't.
             AppExecutorUtil.getAppScheduledExecutorService().schedule({ closeStreams() }, 30, TimeUnit.SECONDS)
         }
+    }
+
+    // Once per execution, whichever of Stop and the end of the creation request gets there first.
+    private fun kill(id: String) {
+        if (!killSent.compareAndSet(false, true)) return
+        model.phase("Killing execution $id…")
+        runCatching { api.killExecution(id) }
+            .onSuccess { if (!it.ok) model.error("Kill failed (HTTP ${it.status}): ${it.message()}") }
+            .onFailure { model.error("Kill failed: ${it.message}") }
     }
 
     override fun detachProcessImpl() {
@@ -137,6 +144,11 @@ class KestraExecutionHandler(
         executionId = id
         flowUid = flow.uid
         model.execution(id, api.executionPage(flow.namespace, flow.id, id))
+        // Stop pressed while the creation request was in flight found no id to kill.
+        if (stopped) {
+            kill(id)
+            return 1
+        }
         topology()?.runStarted(flow.uid)
 
         val state = follow(id)
@@ -149,14 +161,12 @@ class KestraExecutionHandler(
         val file = (if (flowFile.contains("://")) VirtualFileManager.getInstance().findFileByUrl(flowFile)
         else LocalFileSystem.getInstance().findFileByPath(flowFile)) ?: return@runReadAction null
         val source = FileDocumentManager.getInstance().getDocument(file)?.text ?: return@runReadAction null
-        val psi = PsiFileFactory.getInstance(project).createFileFromText("flow.yml", YAMLLanguage.INSTANCE, source)
-        FlowYaml.flow(psi)?.let { source to it }
+        FlowYaml.parse(project, source)?.let { source to it }
     }
 
     // Returns the final state. Streams are always closed on exit, an open follow leaks memory on the server.
-    // Logs are fetched at TRACE, the view filters them by level.
     private fun follow(id: String): String? {
-        val logs = runCatching { api.followLogs(id, "TRACE") }
+        val logs = runCatching { api.followLogs(id) }
             .onFailure { model.error("Failed to stream logs: ${it.message}") }.getOrNull()?.also(streams::add)
         val seen = HashSet<String>()
         val logReader = logs?.let {
@@ -254,6 +264,6 @@ class KestraExecutionHandler(
         }
 
         private val LOG_GRACE: Duration = Duration.ofSeconds(2)
-        private val TERMINAL = setOf("SUCCESS", "WARNING", "FAILED", "KILLED", "CANCELLED", "SKIPPED")
+        private val TERMINAL = setOf("SUCCESS", "WARNING", "FAILED", "KILLED", "CANCELLED", "SKIPPED", "RETRIED", "RESUBMITTED")
     }
 }

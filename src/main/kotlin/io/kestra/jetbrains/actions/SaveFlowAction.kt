@@ -23,8 +23,9 @@ class SaveFlowAction : DumbAwareAction() {
         val project = e.project
         val file = e.getData(CommonDataKeys.PSI_FILE) ?: return
         val editor = e.getData(CommonDataKeys.EDITOR)
+        // Namespace and id come from the same text as the body: the PSI may not be committed after an edit of the id.
         val source = editor?.document?.text ?: file.text
-        val flow = FlowYaml.flow(file) ?: return
+        val flow = FlowYaml.parse(file.project, source) ?: return
         object : Task.Backgroundable(project, "Saving ${flow.uid} to Kestra", false) {
             override fun run(indicator: ProgressIndicator) {
                 try {

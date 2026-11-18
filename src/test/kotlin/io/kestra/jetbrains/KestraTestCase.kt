@@ -7,10 +7,17 @@ import io.kestra.jetbrains.settings.KestraSettings
 abstract class KestraTestCase : BasePlatformTestCase() {
     protected lateinit var kestra: FakeKestra
 
+    // What /configs reports. Null: the endpoint fails, as when the version cannot be read.
+    protected var kestraVersion: String? = "2.0.10"
+
     override fun setUp() {
         super.setUp()
         kestra = FakeKestra()
-        kestra.json("GET", "/configs") { """{"version":"2.0.10"}""" }
+        kestra.handle("GET", "/configs") { exchange, _ ->
+            val version = kestraVersion
+            if (version == null) FakeKestra.respond(exchange, 500, """{"message":"unavailable"}""")
+            else FakeKestra.respond(exchange, 200, """{"version":"$version"}""")
+        }
         KestraSettings.instance.update(kestra.url, "", "INFO")
     }
 

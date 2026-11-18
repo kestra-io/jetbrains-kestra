@@ -8,6 +8,7 @@ data class FlowInput(
     val required: Boolean,
     val defaultValue: String,
     val values: List<String>,
+    val description: String = "",
 )
 
 // A flow parsed into plain values, see FlowYaml.toValue.
@@ -76,6 +77,7 @@ class Flow(val root: Map<String, Any?>) {
                 else -> Gson().toJson(fallback)
             },
             values = (input["values"] as? List<*>)?.mapNotNull { it as? String }.orEmpty(),
+            description = input["description"] as? String ?: "",
         )
     }
 
