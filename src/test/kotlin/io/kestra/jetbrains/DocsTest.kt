@@ -87,6 +87,25 @@ class DocsTest : KestraTestCase() {
         assertTrue(js.contains("role=\"button\""))
     }
 
+    // Most plugin groups have no sub-group: their elements sit on the root entry, and the group page has to list
+    // them. No JavaScript engine runs in these tests, so this reads the page's source (the rendering itself was
+    // checked by hand with node); the data it renders is checked on the Kotlin side.
+    fun testGroupPageListsTheRootsOwnElements() {
+        val js = DocsTest::class.java.getResource("/docs/docs.js")!!.readText()
+        val group = js.substringAfter("function renderGroupPage(root, subs)").substringBefore("function renderSubPage")
+        assertTrue(group.contains("elementRows(root)"))
+        assertTrue(group.indexOf("sub:") < group.indexOf("elementRows(root)"))
+        assertTrue(js.substringAfter("function elementRows(entry)").substringBefore("function renderSubPage").contains("type:\${element.cls}"))
+        assertTrue(js.substringAfter("function renderSubPage(sub)").substringBefore("const BETA_NOTICE").contains("elementRows(sub)"))
+
+        kestra.json("GET", "/plugins/groups/subgroups") {
+            """[{"name":"plugin-script-dotnet","group":"io.kestra.plugin.scripts.dotnet","subGroup":null,"title":".NET","tasks":[{"cls":"io.kestra.plugin.scripts.dotnet.Script","title":"Run C#"}]}]"""
+        }
+        val root = DocsApi.handle("subgroups", JsonObject()).asJsonArray[0].asJsonObject
+        assertTrue(root.get("subGroup").isJsonNull)
+        assertEquals("io.kestra.plugin.scripts.dotnet.Script", root.getAsJsonArray("tasks")[0].asJsonObject.get("cls").asString)
+    }
+
     fun testPageBundlesItsLibraries() {
         val html = KestraDocsView.page("window.kestraPost = function () {};")
         listOf("markdown-it 14.3.3", "markdown-it-container 4.0.0", "DOMPurify 3.4.17", "window.kestraDocs", ".nav-row").forEach { assertTrue(it, html.contains(it)) }

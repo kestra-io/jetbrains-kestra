@@ -160,15 +160,21 @@
             .map(entry => navRow(`group:${entry.name}`, entry.group, entry.title || entry.name || '')).join('');
     }
 
+    // A group with no sub-group (most of them) holds its elements on the root entry itself; one with both lists
+    // its sub-groups first, then the root's own elements.
     function renderGroupPage(root, subs) {
         return pageHeader(root.group, root.title || root.name || '')
-            + subs.sort(byTitle).map(sub => navRow(`sub:${sub.subGroup}`, sub.subGroup, sub.title || '')).join('');
+            + subs.sort(byTitle).map(sub => navRow(`sub:${sub.subGroup}`, sub.subGroup, sub.title || '')).join('')
+            + elementRows(root);
+    }
+
+    function elementRows(entry) {
+        return pluginElements(entry).sort((a, b) => a.cls.localeCompare(b.cls))
+            .map(element => navRow(`type:${element.cls}`, element.cls, element.cls.split('.').pop(), element.title)).join('');
     }
 
     function renderSubPage(sub) {
-        return pageHeader(sub.subGroup, sub.title || '')
-            + pluginElements(sub).sort((a, b) => a.cls.localeCompare(b.cls))
-                .map(element => navRow(`type:${element.cls}`, element.cls, element.cls.split('.').pop(), element.title)).join('');
+        return pageHeader(sub.subGroup, sub.title || '') + elementRows(sub);
     }
 
     const BETA_NOTICE = 'This plugin is currently in beta. While it is considered safe for use, please be aware that its API could change in ways that are not compatible with earlier versions in future releases, or it might become unsupported.';
@@ -395,7 +401,12 @@
     async function pluginCrumbs(type) {
         const name = type.split('.').pop() || type;
         const entries = await loadPlugins();
-        const sub = entries && entries.find(candidate => candidate.subGroup && pluginElements(candidate).some(element => element.cls === type));
+        const owns = candidate => pluginElements(candidate).some(element => element.cls === type);
+        const sub = entries && entries.find(candidate => candidate.subGroup && owns(candidate));
+        const own = entries && !sub && entries.find(candidate => !candidate.subGroup && owns(candidate));
+        if (own) {
+            return [{label: 'Plugins', nav: 'plugins'}, {label: own.title || own.name || '', nav: `group:${own.name}`}, {label: name}];
+        }
         if (!entries || !sub) {
             return [{label: 'Plugins', nav: 'plugins'}, {label: name}];
         }
