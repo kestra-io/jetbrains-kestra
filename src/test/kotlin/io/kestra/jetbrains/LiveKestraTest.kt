@@ -282,7 +282,7 @@ class LiveKestraTest : BasePlatformTestCase() {
         var exitCode = -1
         val model = RunModel("company.team.hello")
         val output = RunRecorder(model)
-        val handler = KestraExecutionHandler(project, path, model, inputs)
+        val handler = KestraExecutionHandler(project, path, model, inputsProvider = inputs)
         handler.addProcessListener(object : ProcessListener {
             override fun processTerminated(event: ProcessEvent) {
                 exitCode = event.exitCode

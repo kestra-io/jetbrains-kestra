@@ -232,10 +232,14 @@ class KestraApi : Disposable {
         if (inputs.isEmpty()) {
             return request("POST", path)
         }
-        // FILE inputs are streamed from disk, never held in memory.
+        // FILE inputs are streamed from disk, never held in memory, and take as long as the disk and the link do.
         val multipart = Multipart.stream(inputs)
-        return request("POST", path, body = multipart.body, contentType = multipart.contentType, timeout = Duration.ofMinutes(10))
+        return request("POST", path, body = multipart.body, contentType = multipart.contentType, timeout = uploadTimeout(inputs))
     }
+
+    // Text-only inputs are small: they keep the default timeout, only a file from disk gets the long one.
+    internal fun uploadTimeout(inputs: List<FormPart>): Duration =
+        if (inputs.any { it is FormPart.LocalFile }) Duration.ofMinutes(10) else Duration.ofSeconds(30)
 
     fun execution(executionId: String): ApiResponse = get("/executions/${KestraUrls.segment(executionId)}")
 
@@ -256,9 +260,9 @@ class KestraApi : Disposable {
 
     fun followExecution(executionId: String) = stream("/executions/${KestraUrls.segment(executionId)}/follow")
 
-    // Everything is requested and the view filters by level. The parameter is only needed up to 2.0, newer
-    // servers ignore it.
-    fun followLogs(executionId: String) = stream("/logs/${KestraUrls.segment(executionId)}/follow?minLevel=TRACE")
+    // No level filter: 1.x takes an optional minLevel and sends every level without it, 2.0 filters through its
+    // own query parameters. The view filters by level.
+    fun followLogs(executionId: String) = stream("/logs/${KestraUrls.segment(executionId)}/follow")
 
     // The flow's topology as the Kestra UI draws it: nodes, edges and clusters.
     fun flowGraph(source: String): ApiResponse = postYaml("/flows/graph", source)

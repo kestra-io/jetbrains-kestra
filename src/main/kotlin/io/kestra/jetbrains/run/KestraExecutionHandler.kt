@@ -34,6 +34,8 @@ class KestraExecutionHandler(
     private val project: Project,
     private val flowFile: String,
     val model: RunModel,
+    // How long Stop waits for the creation request to answer before it abandons it, see destroyProcessImpl.
+    private val stopWait: Duration = Duration.ofSeconds(30),
     // Returns the input values, or null when the user cancels. Replaced in tests.
     private val inputsProvider: (Flow) -> List<FormPart>? = { flow -> askInputs(project, flow) },
 ) : ProcessHandler() {
@@ -45,9 +47,18 @@ class KestraExecutionHandler(
     @Volatile private var stopped = false
     private val killSent = AtomicBoolean(false)
 
+    // Guards the creation request against Stop abandoning it: the run thread, and whether it is in that request.
+    private val creationLock = Any()
+    private var runThread: Thread? = null
+    @Volatile private var creating = false
+    @Volatile private var abandoned = false
+
     override fun startNotify() {
         super.startNotify()
-        ApplicationManager.getApplication().executeOnPooledThread { runSafely() }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            synchronized(creationLock) { runThread = Thread.currentThread() }
+            runSafely()
+        }
     }
 
     override fun destroyProcessImpl() {
@@ -55,8 +66,11 @@ class KestraExecutionHandler(
         ApplicationManager.getApplication().executeOnPooledThread {
             val id = executionId
             if (id == null) {
-                // Nothing to kill yet: run() kills the execution if its id arrives after this.
-                closeStreams()
+                // Nothing to kill yet: run() kills the execution if its id arrives after this. A creation request
+                // in flight is waited for, so the execution it creates can be killed, but not forever: a file
+                // upload may take ten minutes. No stream is open before the execution exists.
+                model.phase(if (creating) "Stopping: waiting for the instance to create the execution, to kill it…" else "Stopping…")
+                AppExecutorUtil.getAppScheduledExecutorService().schedule(::abandonCreation, stopWait.toMillis(), TimeUnit.MILLISECONDS)
                 return@executeOnPooledThread
             }
             kill(id)
@@ -66,12 +80,24 @@ class KestraExecutionHandler(
     }
 
     // Once per execution, whichever of Stop and the end of the creation request gets there first.
-    private fun kill(id: String) {
-        if (!killSent.compareAndSet(false, true)) return
+    // True when the instance accepted the kill.
+    private fun kill(id: String): Boolean {
+        if (!killSent.compareAndSet(false, true)) return false
         model.phase("Killing execution $id…")
-        runCatching { api.killExecution(id) }
+        return runCatching { api.killExecution(id) }
             .onSuccess { if (!it.ok) model.error("Kill failed (HTTP ${it.status}): ${it.message()}") }
             .onFailure { model.error("Kill failed: ${it.message}") }
+            .getOrNull()?.ok == true
+    }
+
+    // Interrupting the thread cancels the HTTP request. Only while it is in the creation request: the lock keeps
+    // the interrupt from landing on whatever the run thread does once the response arrived.
+    private fun abandonCreation() {
+        synchronized(creationLock) {
+            if (!creating) return
+            abandoned = true
+            runThread?.interrupt()
+        }
     }
 
     override fun detachProcessImpl() {
@@ -97,6 +123,7 @@ class KestraExecutionHandler(
             model.error("Run failed: ${e.message ?: e.javaClass.simpleName}")
         } finally {
             closeStreams()
+            synchronized(creationLock) { runThread = null }
             notifyProcessTerminated(exitCode)
         }
     }
@@ -115,7 +142,7 @@ class KestraExecutionHandler(
             constraints.forEach(model::error)
             return 1
         }
-        if (stopped) return 1
+        if (stopped) return stoppedBeforeStart()
         model.phase("Deploying…")
 
         val deployed = api.upsertFlow(flow.namespace, flow.id, source)
@@ -130,9 +157,23 @@ class KestraExecutionHandler(
             model.phase("Run cancelled")
             return 1
         }
-        if (stopped) return 1
+        if (stopped) return stoppedBeforeStart()
 
-        val created = api.createExecution(flow.namespace, flow.id, inputs)
+        val created = try {
+            synchronized(creationLock) { creating = true }
+            api.createExecution(flow.namespace, flow.id, inputs)
+        } catch (e: KestraApiException) {
+            if (!abandoned) throw e
+            model.error("Stopped without an answer from the instance to the execution request: the execution may still have been created, check the instance.")
+            model.state("UNKNOWN")
+            return 1
+        } finally {
+            synchronized(creationLock) {
+                creating = false
+                // An interrupt that lost the race with the response must not reach the next request.
+                Thread.interrupted()
+            }
+        }
         if (!created.ok) {
             model.error("Failed to start the execution (HTTP ${created.status}): ${created.message()}")
             return 1
@@ -146,7 +187,7 @@ class KestraExecutionHandler(
         model.execution(id, api.executionPage(flow.namespace, flow.id, id))
         // Stop pressed while the creation request was in flight found no id to kill.
         if (stopped) {
-            kill(id)
+            if (kill(id)) model.state("KILLED")
             return 1
         }
         topology()?.runStarted(flow.uid)
@@ -154,6 +195,11 @@ class KestraExecutionHandler(
         val state = follow(id)
         model.state(state ?: "UNKNOWN")
         return if (state == "SUCCESS" || state == "WARNING") 0 else 1
+    }
+
+    private fun stoppedBeforeStart(): Int {
+        model.phase("Run stopped before the execution started")
+        return 1
     }
 
     // The editor buffer, saved or not, as the VS Code extension does.

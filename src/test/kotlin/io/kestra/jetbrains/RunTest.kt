@@ -49,7 +49,7 @@ class RunTest : KestraTestCase() {
         val start = kestra.requests.single { it.path == "/executions/company.team/hello" }
         assertTrue(start.headers["content-type"]!!.startsWith("multipart/form-data"))
         assertTrue(start.body.contains("name=\"user\"\r\n\r\nAna"))
-        assertTrue(kestra.requests.any { it.path == "/logs/exec1/follow?minLevel=TRACE" })
+        assertTrue(kestra.requests.any { it.path == "/logs/exec1/follow" })
     }
 
     fun testValidationErrorsStopTheRun() {
@@ -85,30 +85,88 @@ class RunTest : KestraTestCase() {
         assertTrue(output, output.contains("[greet] RETRIED 1.50s"))
     }
 
-    fun testStopWhileTheExecutionIsBeingCreatedKillsIt() {
-        val created = CountDownLatch(1)
+    // The creation request is held until the test releases it, so Stop is pressed while it is in flight.
+    private fun holdCreation(release: CountDownLatch) {
         kestra.json("POST", "/flows/validate") { "[{}]" }
         kestra.json("PUT", "/flows/company.team/hello") { """{"revision":1}""" }
         kestra.handle("POST", "/executions/company.team/hello") { exchange, _ ->
-            created.await(10, TimeUnit.SECONDS)
-            FakeKestra.respond(exchange, 200, """{"id":"exec1"}""")
+            release.await(30, TimeUnit.SECONDS)
+            // Gone when Stop abandoned the request: nobody listens, which is the point.
+            runCatching { FakeKestra.respond(exchange, 200, """{"id":"exec1"}""") }
         }
-        kestra.json("DELETE", "/executions/exec1/actions/kill") { "{}" }
+    }
 
+    private fun startAndStopDuringCreation(release: CountDownLatch, stopWait: java.time.Duration = java.time.Duration.ofSeconds(30)): Pair<KestraExecutionHandler, RunRecorder> {
+        holdCreation(release)
+        val file = myFixture.configureByText("flow.yml", FLOW)
+        val model = RunModel("company.team.hello")
+        val output = RunRecorder(model)
+        val handler = KestraExecutionHandler(project, file.virtualFile.url, model, stopWait) { emptyList() }
+        handler.startNotify()
+        waitUntil { kestra.requests.any { it.method == "POST" && it.path == "/executions/company.team/hello" } }
+        handler.destroyProcess()
+        // The stop path saw no execution id yet: only then does the run thread own the kill. Not a sleep.
+        waitUntil { output.text().contains("Stopping: waiting for the instance to create the execution") }
+        return handler to output
+    }
+
+    fun testStopWhileTheExecutionIsBeingCreatedKillsItOnce() {
+        val created = CountDownLatch(1)
+        kestra.json("DELETE", "/executions/exec1/actions/kill") { "{}" }
+        val (handler, output) = startAndStopDuringCreation(created)
+        created.countDown()
+        waitUntil { handler.isProcessTerminated }
+
+        assertEquals(output.text(), 1, kestra.requests.count { it.method == "DELETE" })
+        assertEquals("/executions/exec1/actions/kill", kestra.requests.single { it.method == "DELETE" }.path)
+        assertTrue(output.text(), kestra.requests.none { it.path.endsWith("/follow") })
+        // The run ends with a state, not just silence.
+        assertTrue(output.text(), output.text().contains("State KILLED"))
+    }
+
+    fun testStopAbandonsACreationRequestThatNeverAnswers() {
+        val never = CountDownLatch(1)
+        try {
+            val (handler, output) = startAndStopDuringCreation(never, java.time.Duration.ofMillis(100))
+            // Terminates while the instance still holds the request: the handler does not wait for it.
+            waitUntil { handler.isProcessTerminated }
+            assertEquals(1L, never.count)
+            assertTrue(output.text(), output.text().contains("Stopped without an answer from the instance"))
+            assertTrue(output.text(), output.text().contains("State UNKNOWN"))
+            assertTrue(kestra.requests.none { it.method == "DELETE" })
+        } finally {
+            never.countDown()
+        }
+    }
+
+    fun testStopBeforeTheExecutionShowsWhatHappened() {
+        val validating = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        kestra.handle("POST", "/flows/validate") { exchange, _ ->
+            validating.countDown()
+            release.await(30, TimeUnit.SECONDS)
+            runCatching { FakeKestra.respond(exchange, 200, "[{}]") }
+        }
+        kestra.json("PUT", "/flows/company.team/hello") { """{"revision":1}""" }
         val file = myFixture.configureByText("flow.yml", FLOW)
         val model = RunModel("company.team.hello")
         val output = RunRecorder(model)
         val handler = KestraExecutionHandler(project, file.virtualFile.url, model) { emptyList() }
         handler.startNotify()
-        waitUntil { kestra.requests.any { it.method == "POST" && it.path == "/executions/company.team/hello" } }
-        // Stop pressed while the POST is in flight: no execution id to kill yet.
+        assertTrue(validating.await(30, TimeUnit.SECONDS))
         handler.destroyProcess()
-        Thread.sleep(200)
-        created.countDown()
+        waitUntil { output.text().contains("Stopping…") }
+        release.countDown()
         waitUntil { handler.isProcessTerminated }
 
-        assertTrue(output.text(), kestra.requests.any { it.method == "DELETE" && it.path == "/executions/exec1/actions/kill" })
-        assertTrue(output.text(), kestra.requests.none { it.path.endsWith("/follow") })
+        assertTrue(output.text(), output.text().contains("Run stopped before the execution started"))
+        assertTrue(kestra.requests.none { it.path.startsWith("/executions") })
+    }
+
+    fun testOnlyFilesGetTheLongUploadTimeout() {
+        val text = listOf(FormPart.Text("user", "Ana"))
+        assertEquals(java.time.Duration.ofSeconds(30), KestraApi.instance.uploadTimeout(text))
+        assertEquals(java.time.Duration.ofMinutes(10), KestraApi.instance.uploadTimeout(text + FormPart.LocalFile("doc", java.nio.file.Path.of("x"))))
     }
 
     fun testKillUsesTheRouteOfTheInstanceVersion() {
@@ -194,7 +252,7 @@ class RunTest : KestraTestCase() {
         var exitCode = -1
         val model = RunModel("company.team.hello")
         val output = RunRecorder(model)
-        val handler = KestraExecutionHandler(project, path, model, inputs)
+        val handler = KestraExecutionHandler(project, path, model, inputsProvider = inputs)
         handler.addProcessListener(object : ProcessListener {
             override fun processTerminated(event: ProcessEvent) {
                 exitCode = event.exitCode
