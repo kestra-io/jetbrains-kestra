@@ -13,13 +13,13 @@ data class FlowInput(
 
 // A flow parsed into plain values, see FlowYaml.toValue.
 class Flow(val root: Map<String, Any?>) {
-    val id: String get() = root["id"] as? String ?: ""
-    val namespace: String get() = root["namespace"] as? String ?: ""
+    val id: String get() = text(root["id"])
+    val namespace: String get() = text(root["namespace"])
     val uid: String get() = "$namespace.$id"
 
     // FORM groups expand to their children keyed by dotted id, the shape the executions API expects.
     fun inputs(): List<FlowInput> = maps(root["inputs"]).flatMap { input ->
-        val id = input["id"] as? String ?: return@flatMap emptyList()
+        val id = text(input["id"]).ifEmpty { return@flatMap emptyList() }
         if ((input["type"] as? String)?.uppercase() == "FORM") {
             maps(input["inputs"]).mapNotNull { child -> toInput(child, "$id.") }
         } else {
@@ -27,11 +27,11 @@ class Flow(val root: Map<String, Any?>) {
         }
     }
 
-    fun inputIds(): List<String> = maps(root["inputs"]).mapNotNull { it["id"] as? String }
+    fun inputIds(): List<String> = maps(root["inputs"]).map { text(it["id"]) }.filter { it.isNotEmpty() }
 
-    fun taskIds(): List<String> = tasks().mapNotNull { it["id"] as? String }
+    fun taskIds(): List<String> = tasks().map { text(it["id"]) }.filter { it.isNotEmpty() }
 
-    fun taskType(taskId: String): String? = tasks().firstOrNull { it["id"] == taskId }?.get("type") as? String
+    fun taskType(taskId: String): String? = tasks().firstOrNull { text(it["id"]) == taskId }?.get("type") as? String
 
     fun taskTypes(): List<String> = buildList {
         fun walk(value: Any?) {
@@ -64,24 +64,27 @@ class Flow(val root: Map<String, Any?>) {
     }
 
     private fun toInput(input: Map<*, *>, prefix: String): FlowInput? {
-        val id = input["id"] as? String ?: return null
+        val id = text(input["id"]).ifEmpty { return null }
         val fallback = input["prefill"] ?: input["defaults"]
         return FlowInput(
             id = prefix + id,
             type = (input["type"] as? String)?.uppercase() ?: "STRING",
             // Kestra inputs are required unless explicitly marked optional.
-            required = (input["required"] as? String)?.lowercase() != "false",
+            required = text(input["required"]).lowercase() != "false",
             defaultValue = when (fallback) {
                 null -> ""
                 is String -> fallback
                 else -> Gson().toJson(fallback)
             },
-            values = (input["values"] as? List<*>)?.mapNotNull { it as? String }.orEmpty(),
+            values = (input["values"] as? List<*>)?.map(::text)?.filter { it.isNotEmpty() }.orEmpty(),
             description = input["description"] as? String ?: "",
         )
     }
 
     companion object {
+        // A scalar as its text: an id such as 42 is a number in the YAML, but still an id.
+        private fun text(value: Any?): String = if (value is Map<*, *> || value is List<*>) "" else value?.toString().orEmpty()
+
         private fun maps(value: Any?): List<Map<*, *>> = (value as? List<*>)?.filterIsInstance<Map<*, *>>().orEmpty()
     }
 }

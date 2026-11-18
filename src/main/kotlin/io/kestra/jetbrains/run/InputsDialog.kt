@@ -9,6 +9,7 @@ import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.openapi.ui.ValidationInfo
 import com.intellij.ui.SimpleListCellRenderer
+import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBScrollPane
@@ -42,8 +43,11 @@ class InputsDialog(private val project: Project, flowUid: String, private val in
             addBrowseFolderListener(project, FileChooserDescriptorFactory.singleFile().withTitle("Select File for ${input.id}"))
         }.let { field -> Field(field) { field.text } }
         input.type == "SECRET" -> JBPasswordField().apply { text = input.defaultValue }.let { field -> Field(field) { String(field.password) } }
+        // As in the VS Code extension: BOOL is a plain checkbox, always sent, only BOOLEAN can be left to the flow.
+        input.type == "BOOL" -> JBCheckBox().apply { isSelected = input.defaultValue.equals("true", ignoreCase = true) }
+            .let { box -> Field(box) { box.isSelected.toString() } }
         // Tri-state: left on the first entry, the input is not sent and the flow's own default applies.
-        input.type in setOf("BOOLEAN", "BOOL") -> ComboBox(arrayOf("", "true", "false")).apply {
+        input.type == "BOOLEAN" -> ComboBox(arrayOf("", "true", "false")).apply {
             renderer = SimpleListCellRenderer.create("") { it.ifEmpty { "(flow default)" } }
             selectedItem = input.defaultValue.lowercase().takeIf { it == "true" || it == "false" } ?: ""
         }.let { field -> Field(field) { field.selectedItem?.toString().orEmpty() } }

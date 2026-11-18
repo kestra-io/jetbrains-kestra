@@ -27,6 +27,18 @@ class InputsDialogTest : BasePlatformTestCase() {
         )
     }
 
+    // VS Code renders BOOL as a checkbox, which always has a value: only BOOLEAN is tri-state.
+    fun testBoolIsACheckboxThatIsAlwaysSent() {
+        assertEquals(
+            listOf<FormPart>(FormPart.Text("flag", "false")),
+            parts(FlowInput("flag", "BOOL", required = false, defaultValue = "", values = emptyList())),
+        )
+        assertEquals(
+            listOf<FormPart>(FormPart.Text("flag", "true")),
+            parts(FlowInput("flag", "BOOL", required = false, defaultValue = "true", values = emptyList())),
+        )
+    }
+
     fun testMultiselectIsSentAsAJsonArrayOfTheValues() {
         assertEquals(
             listOf<FormPart>(FormPart.Text("colors", """["red","blue"]""")),

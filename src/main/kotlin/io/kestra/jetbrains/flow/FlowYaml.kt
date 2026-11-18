@@ -6,9 +6,11 @@ import com.intellij.psi.PsiFileFactory
 import com.intellij.psi.PsiFile
 import com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.yaml.YAMLLanguage
+import org.jetbrains.yaml.psi.YAMLBlockScalar
 import org.jetbrains.yaml.psi.YAMLFile
 import org.jetbrains.yaml.psi.YAMLKeyValue
 import org.jetbrains.yaml.psi.YAMLMapping
+import org.jetbrains.yaml.psi.YAMLQuotedText
 import org.jetbrains.yaml.psi.YAMLScalar
 import org.jetbrains.yaml.psi.YAMLSequence
 import org.jetbrains.yaml.psi.YAMLSequenceItem
@@ -55,13 +57,26 @@ object FlowYaml {
 
     private val PLUGIN_TYPE = Regex("""[A-Za-z_][\w]*(\.[\w$]+)+""")
 
-    // Maps and sequences become Map/List, scalars their text value.
+    // Maps and sequences become Map/List, scalars their YAML type: `retries: 3` is the number 3, `"3"` the string.
+    // It is what the VS Code extension sends for an input's default, a JSON default must not turn into strings.
     fun toValue(value: YAMLValue?): Any? = when (value) {
         is YAMLMapping -> value.keyValues.associate { it.keyText to toValue(it.value) }
         is YAMLSequence -> value.items.map { toValue(it.value) }
-        is YAMLScalar -> value.textValue
+        is YAMLScalar -> if (value is YAMLQuotedText || value is YAMLBlockScalar) value.textValue else plain(value.textValue)
         else -> null
     }
+
+    // The YAML 1.2 core schema, as Kestra reads a plain scalar.
+    private fun plain(text: String): Any = when {
+        text == "true" || text == "True" || text == "TRUE" -> true
+        text == "false" || text == "False" || text == "FALSE" -> false
+        INTEGER.matches(text) -> text.toLongOrNull() ?: text.removePrefix("+").toBigInteger()
+        FLOAT.matches(text) -> text.toDouble()
+        else -> text
+    }
+
+    private val INTEGER = Regex("[-+]?[0-9]+")
+    private val FLOAT = Regex("[-+]?(\\.[0-9]+|[0-9]+(\\.[0-9]*)?)([eE][-+]?[0-9]+)?")
 
     // A validation path segment selecting a sequence item by its `id`, as Kestra 2.0 reports tasks[my-task].
     data class ById(val id: String)

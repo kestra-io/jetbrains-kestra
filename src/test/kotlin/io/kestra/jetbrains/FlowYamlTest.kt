@@ -48,9 +48,38 @@ class FlowYamlTest : BasePlatformTestCase() {
         assertEquals(listOf("user", "optional", "form.name", "payload"), flow.inputs().map { it.id })
         assertEquals("Kestra", flow.inputs()[0].defaultValue)
         assertFalse(flow.inputs()[1].required)
-        assertEquals("""{"a":"1"}""", flow.inputs()[3].defaultValue)
+        assertEquals("""{"a":1}""", flow.inputs()[3].defaultValue)
         assertEquals(listOf("parallel", "child", "alert"), flow.taskIds())
         assertEquals("io.kestra.plugin.core.log.Log", flow.taskType("child"))
+    }
+
+    // A JSON default keeps its types: it is sent as it is and replaces the flow's own default on the instance.
+    fun testYamlScalarsKeepTheirTypes() {
+        val flow = FlowYaml.flow(myFixture.configureByText("typed.yml", """
+            id: 42
+            namespace: company.team
+            inputs:
+              - id: payload
+                type: JSON
+                defaults:
+                  retries: 3
+                  ratio: 1.5
+                  enabled: true
+                  quoted: "3"
+                  nothing:
+                  name: Ana
+              - id: flag
+                type: BOOLEAN
+                required: false
+                defaults: false
+            tasks:
+              - id: t
+                type: io.kestra.plugin.core.log.Log
+        """.trimIndent()))!!
+        assertEquals("""{"retries":3,"ratio":1.5,"enabled":true,"quoted":"3","name":"Ana"}""", flow.inputs()[0].defaultValue)
+        assertEquals("false", flow.inputs()[1].defaultValue)
+        assertFalse(flow.inputs()[1].required)
+        assertEquals("company.team.42", flow.uid)
     }
 
     fun testFindsValidationPaths() {
