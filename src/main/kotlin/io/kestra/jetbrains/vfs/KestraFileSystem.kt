@@ -57,7 +57,8 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
         return KestraVirtualFile(this, parent.instance, parent.namespace, relative, directory, parent).also { files[path] = it }
     }
 
-    // Lists a folder from the instance. Network: background threads only.
+    // Lists a folder from the instance. Network: background threads only. Returns what the instance listed;
+    // dir.children also holds the entries kept because they hold changes the instance does not have.
     // The root also holds a _flows folder: the namespace's flows as <id>.yml files, as in the VS Code extension.
     fun list(dir: KestraVirtualFile): List<KestraVirtualFile> {
         val entries = if (isFlowsFolder(dir)) {
@@ -69,20 +70,20 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
         }
         val children = entries.sortedWith(compareBy({ !it.directory }, { it.name.lowercase() })).map { entry ->
             child(dir, entry.name, entry.directory).also {
-                // A file changed on the instance is read again, unless it holds changes the instance has not accepted.
-                if ((it.modified != entry.modified || isFlowsFolder(dir)) && !NamespaceSaver.instance.hasUnsyncedChanges(it)) it.content = null
+                // A file changed on the instance is read again, unless this IDE holds changes the instance has not got.
+                if (it.modified != entry.modified || isFlowsFolder(dir)) it.invalidate()
                 it.size = entry.size
                 it.modified = entry.modified
             }
         }
-        // What left the instance is forgotten, unless it holds changes the instance has not accepted: they stay
-        // until the user discards them, or a save goes through (which recreates the file).
+        // What left the instance is forgotten, unless it holds changes the instance has not got: they stay until
+        // the user discards them, or a save goes through (which recreates the file). Such an entry is not listed
+        // again by the callers: the instance has no such folder any more.
         val gone = dir.loadedChildren.orEmpty().filter { it !in children }
-        val kept = gone.filter(::holdsUnsyncedChanges)
+        val kept = gone.filter(::holdsLocalChanges)
         (gone - kept.toSet()).forEach(::forget)
-        val all = if (kept.isEmpty()) children else (children + kept).sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
-        dir.loadedChildren = all
-        return all
+        dir.loadedChildren = if (kept.isEmpty()) children else (children + kept).sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+        return children
     }
 
     internal fun read(file: KestraVirtualFile): ByteArray = io {
@@ -135,8 +136,8 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
     fun flowId(file: KestraVirtualFile) = file.name.substringBeforeLast('.')
 
     // The file, or a file under it when it is a folder.
-    private fun holdsUnsyncedChanges(file: KestraVirtualFile) =
-        NamespaceSaver.instance.unsyncedFiles().any { it === file || it.path.startsWith(file.path + "/") }
+    private fun holdsLocalChanges(file: KestraVirtualFile) =
+        files.values.any { (it === file || it.path.startsWith(file.path + "/")) && it.hasLocalChanges }
 
     private fun forget(file: KestraVirtualFile) {
         files.entries.removeIf { (key, known) ->

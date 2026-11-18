@@ -2,21 +2,29 @@ package io.kestra.jetbrains
 
 import com.intellij.notification.Notification
 import com.intellij.notification.Notifications
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.WriteAction
+import com.intellij.openapi.components.service
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.ui.TestDialog
+import com.intellij.openapi.progress.impl.CoreProgressManager
+import com.intellij.openapi.progress.util.TitledIndicator
+import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.TestDialogManager
 import com.intellij.openapi.ui.TestInputDialog
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.testFramework.PlatformTestUtil
+import com.intellij.testFramework.replaceService
 import com.intellij.testFramework.TestActionEvent
 import io.kestra.jetbrains.namespace.KestraNamespacesPanel
 import io.kestra.jetbrains.settings.KestraSettings
+import io.kestra.jetbrains.vfs.ExitGuard
 import io.kestra.jetbrains.vfs.KestraFileSystem
 import io.kestra.jetbrains.vfs.KestraVirtualFile
 import io.kestra.jetbrains.vfs.NamespaceSaver
+import io.kestra.jetbrains.vfs.SaveOnExit
 import io.kestra.jetbrains.vfs.UnsavedCopies
 import java.io.IOException
 import java.util.concurrent.CompletableFuture
@@ -43,10 +51,21 @@ class NamespaceBrowserTest : KestraTestCase() {
     // Holds the upload of a file whose name contains "slowwrite", so a save stays in flight.
     @Volatile private var writeGate: CountDownLatch? = null
 
+    // What the instance reports as the modification time of every file: raised, a file changed there.
+    @Volatile private var modifiedTime = 1L
+
+    // As the real instance: a folder without any file answers "Directory not found" instead of an empty list.
+    @Volatile private var strictDirectories = false
+
+    // The questions the IDE asked, answered by answer().
+    private val dialogs = CopyOnWriteArrayList<String>()
+
     private val notifications = CopyOnWriteArrayList<Notification>()
 
     override fun setUp() {
         super.setUp()
+        // The saver is an application service that outlives a test: each one gets its own, with nothing refused or queued.
+        ApplicationManager.getApplication().replaceService(NamespaceSaver::class.java, NamespaceSaver(), testRootDisposable)
         stored["/README.md"] = "# Hello"
         stored["/scripts/run.py"] = "print(1)"
         stored["/.git/config"] = "x"
@@ -62,8 +81,9 @@ class NamespaceBrowserTest : KestraTestCase() {
         kestra.handle("GET", "/namespaces/company.team/files/directory") { exchange, request ->
             val dir = query(request, "path").trimEnd('/')
             val names = stored.keys.filter { it.startsWith("$dir/") }.map { it.removePrefix("$dir/") }
+            if (strictDirectories && names.isEmpty() && dir.isNotEmpty()) return@handle FakeKestra.respond(exchange, 404, """{"message":"Directory not found"}""")
             val entries = names.map { it.substringBefore('/') to it.contains('/') }.distinct().joinToString(",") { (name, isDir) ->
-                """{"type":"${if (isDir) "Directory" else "File"}","size":1,"fileName":"$name","lastModifiedTime":1}"""
+                """{"type":"${if (isDir) "Directory" else "File"}","size":1,"fileName":"$name","lastModifiedTime":$modifiedTime}"""
             }
             FakeKestra.respond(exchange, 200, "[$entries]")
         }
@@ -159,8 +179,8 @@ class NamespaceBrowserTest : KestraTestCase() {
 
         // The refused edit is not replaced by the instance's version when the folder is listed again.
         assertTrue(NamespaceSaver.instance.hasUnsyncedChanges(locked))
-        // Quitting the IDE asks before dropping it.
         assertEquals(listOf(locked), NamespaceSaver.instance.unsyncedFiles())
+        modifiedTime = 2
         KestraFileSystem.instance.list(KestraFileSystem.instance.root(instance, "company.team"))
         assertEquals("y", String(locked.contentsToByteArray()))
     }
@@ -188,9 +208,31 @@ class NamespaceBrowserTest : KestraTestCase() {
         waitFor { document.text == "x" }
 
         assertEquals("x", document.text)
+        assertTrue(document.isWritable)
         assertFalse(NamespaceSaver.instance.hasUnsyncedChanges(locked))
         assertEquals(emptyList<KestraVirtualFile>(), NamespaceSaver.instance.unsyncedFiles())
         assertEquals("x", stored["/locked.txt"])
+    }
+
+    // The notification expires; the file stays unsynced, so the tool window has to offer the way out as well.
+    fun testDiscardIsStillOfferedByTheToolWindowAfterTheNotificationExpired() {
+        stored["/locked.txt"] = "x"
+        val panel = KestraNamespacesPanel(project)
+        Disposer.register(testRootDisposable, panel)
+        panel.open("company.team")
+        waitFor { "locked.txt" in rows(panel) }
+        val (locked, notification) = refuseSave("/locked.txt")
+        val document = FileDocumentManager.getInstance().getDocument(locked)!!
+        notification.expire()
+        assertEquals("y", document.text)
+
+        select(panel, "locked.txt")
+        TestDialogManager.setTestDialog(TestDialog.OK)
+        panel.discardLocalChanges()
+        waitFor { document.text == "x" }
+
+        assertEquals("x", document.text)
+        assertFalse(NamespaceSaver.instance.hasUnsyncedChanges(locked))
     }
 
     // The file is gone from the instance, its refused edit is not: only the user drops it.
@@ -201,88 +243,185 @@ class NamespaceBrowserTest : KestraTestCase() {
         assertTrue(fs.list(root).contains(locked))
 
         stored.remove("/locked.txt")
-        val after = fs.list(root)
+        val listed = fs.list(root)
 
-        assertTrue(after.toString(), after.contains(locked))
+        // Not listed by the instance any more, but still here, with its edit.
+        assertFalse(listed.toString(), listed.contains(locked))
+        assertTrue(root.children.contains(locked))
         assertTrue(locked.isValid)
         assertTrue(NamespaceSaver.instance.hasUnsyncedChanges(locked))
         assertEquals("y", String(locked.contentsToByteArray()))
         // A file that really left, with nothing to lose, is forgotten.
         stored.remove("/README.md")
         assertFalse(fs.list(root).any { it.name == "README.md" })
+        assertFalse(root.children.any { it.name == "README.md" })
+    }
+
+    // Discarding what the instance no longer has cannot bring anything back: the file leaves the IDE too.
+    fun testDiscardingTheEditOfAFileThatLeftTheInstanceForgetsIt() {
+        val (locked, _) = refuseSave("/locked.txt")
+        stored.remove("/locked.txt")
+
+        NamespaceSaver.instance.discardChanges(locked)
+        waitFor { !locked.isValid }
+
+        assertFalse(locked.isValid)
+        assertEquals(emptyList<KestraVirtualFile>(), NamespaceSaver.instance.unsyncedFiles())
+        assertFalse(FileEditorManager.getInstance(project).isFileOpen(locked))
+    }
+
+    // A kept folder is not listed again: the instance answers "Directory not found", and that failed Refresh for every namespace.
+    fun testKeptFolderDoesNotBreakRefresh() {
+        stored["/scripts/locked.txt"] = "x"
+        val panel = KestraNamespacesPanel(project)
+        Disposer.register(testRootDisposable, panel)
+        panel.open("company.team")
+        waitFor { "scripts" in rows(panel) }
+        panel.tree.expandRow(rows(panel).indexOf("scripts"))
+        waitFor { "locked.txt" in rows(panel) }
+        refuseSave("/scripts/locked.txt")
+
+        strictDirectories = true
+        stored.keys.removeIf { it.startsWith("/scripts/") }
+        waitUntilDone(panel.refresh())
+
+        assertTrue(notifications.toString(), notifications.none { it.content.contains("failed") })
+        assertTrue(rows(panel).toString(), rows(panel).containsAll(listOf("scripts", "locked.txt")))
     }
 
     // Quit and Restart IDE reach the application listener through different methods.
-    private class Prompt(var quit: Boolean, private val flush: Boolean = true) : NamespaceSaver.ExitPrompt {
-        val waits = CopyOnWriteArrayList<Long>()
-        val asked = CopyOnWriteArrayList<List<KestraVirtualFile>>()
+    private val guard get() = service<ExitGuard>()
 
-        override fun waitForSaves(timeoutMillis: Long) {
-            waits += timeoutMillis
-            if (flush) NamespaceSaver.instance.flush(timeoutMillis)
-        }
-
-        override fun confirmQuit(files: List<KestraVirtualFile>): Boolean {
-            asked += files
-            return quit
+    // The user's answer to the question of the exit: Quit Anyway, or Keep Open.
+    private fun answer(quitAnyway: Boolean) {
+        TestDialogManager.setTestDialog { message ->
+            dialogs += message
+            if (quitAnyway) Messages.OK else Messages.CANCEL
         }
     }
 
+    // The user pressing Cancel on the progress of the exit, once it is shown: true when there was one to cancel.
+    private fun cancelWaitingForSaves(): CompletableFuture<Boolean> = CompletableFuture.supplyAsync {
+        val deadline = System.currentTimeMillis() + 30_000
+        while (System.currentTimeMillis() < deadline) {
+            // Ours: saving the documents has a progress of its own just before.
+            val indicators = CoreProgressManager.getCurrentIndicators().filter { it is TitledIndicator && it.title == "Saving to Kestra" }
+            if (indicators.isNotEmpty()) {
+                indicators.forEach { it.cancel() }
+                return@supplyAsync true
+            }
+            Thread.sleep(10)
+        }
+        false
+    }
+
+    // A save held in flight by the instance, for the exits that have to decide what to do with it.
+    private fun holdASave(): KestraVirtualFile {
+        stored["/slowwrite.txt"] = "a"
+        val slow = KestraFileSystem.instance.findFileByPath("$instance/company.team/slowwrite.txt") as KestraVirtualFile
+        FileEditorManager.getInstance(project).openFile(slow, true)
+        val document = FileDocumentManager.getInstance().getDocument(slow)!!
+        WriteAction.run<RuntimeException> { document.setText("b") }
+        return slow
+    }
+
+    // A tab restored at startup, edited, then Cmd+Q: the saver was never used, and the platform saves the document
+    // only when it closes the projects, after the IDE stopped asking. The exit has to save it first.
     fun testExitSavesWhatWasTypedLastBeforeCheckingForUnsavedFiles() {
-        val prompt = Prompt(quit = false, flush = true)
-        NamespaceSaver.instance.prompt = prompt
+        TestDialogManager.setTestDialog(TestDialog.DEFAULT)
         val readme = KestraFileSystem.instance.findFileByPath("$instance/company.team/README.md") as KestraVirtualFile
         FileEditorManager.getInstance(project).openFile(readme, true)
         val document = FileDocumentManager.getInstance().getDocument(readme)!!
-        // Typed, not saved: the platform saves it only when it closes the projects, after this listener ran.
+        // Typed, not saved: the platform saves it only when it closes the projects.
         WriteAction.run<RuntimeException> { document.setText("# typed right before quitting") }
+        SaveOnExit().appClosing()
 
-        assertTrue(NamespaceSaver.instance.exitListener.canExitApplication())
+        assertTrue(guard.canExitApplication())
 
         assertEquals("# typed right before quitting", stored["/README.md"])
-        assertEquals(emptyList<List<KestraVirtualFile>>(), prompt.asked)
-        assertEquals(1, prompt.waits.size)
+        // Nothing was left to ask about: the dialog of the test platform would have failed.
+        assertEquals(emptyList<String>(), dialogs.toList())
     }
 
     fun testRestartAsksLikeQuitAndQuitAnywayKeepsACopy() {
-        val saver = NamespaceSaver.instance
-        val prompt = Prompt(quit = false, flush = false).also { saver.prompt = it }
+        answer(quitAnyway = false)
         val (locked, _) = refuseSave("/locked.txt")
+        SaveOnExit().appClosing()
 
-        assertFalse(saver.exitListener.canRestartApplication())
-        assertFalse(saver.exitListener.canExitApplication())
-        assertEquals(listOf(listOf(locked), listOf(locked)), prompt.asked.toList())
+        assertFalse(guard.canRestartApplication())
+        assertFalse(guard.canExitApplication())
+        assertEquals(2, dialogs.size)
+        assertTrue(dialogs.toString(), dialogs.all { it.contains("/locked.txt") })
 
-        // A second file whose save is still in flight when the user chooses Quit Anyway.
+        // A second file whose save is in flight when the user gives up waiting, and chooses Quit Anyway.
         val release = CountDownLatch(1).also { writeGate = it }
         try {
-            stored["/slowwrite.txt"] = "a"
-            val slow = KestraFileSystem.instance.findFileByPath("$instance/company.team/slowwrite.txt") as KestraVirtualFile
-            FileEditorManager.getInstance(project).openFile(slow, true)
-            val document = FileDocumentManager.getInstance().getDocument(slow)!!
-            WriteAction.run<RuntimeException> { document.setText("b") }
-
-            prompt.quit = true
-            assertTrue(saver.exitListener.canRestartApplication())
-            assertEquals(setOf(locked, slow), prompt.asked.last().toSet())
+            holdASave()
+            answer(quitAnyway = true)
+            val cancelled = cancelWaitingForSaves()
+            assertTrue(guard.canRestartApplication())
+            assertTrue(cancelled.get(30, TimeUnit.SECONDS))
+            assertTrue(dialogs.last().contains("/locked.txt") && dialogs.last().contains("/slowwrite.txt"))
 
             // Nothing waits after Quit Anyway, although a save is still in flight: the exit hook returns at once.
-            CompletableFuture.runAsync { saver.finishOnExit() }.get(5, TimeUnit.SECONDS)
+            // (Captures the hook: a lambda capturing nothing is a no-argument method named test…, taken for a test.)
+            val hook = SaveOnExit()
+            CompletableFuture.runAsync { hook.appWillBeClosed(true) }.get(5, TimeUnit.SECONDS)
         } finally {
             release.countDown()
-            prompt.quit = false
-            saver.exitListener.canExitApplication()
         }
         assertEquals(setOf("y", "b"), keptCopies().toSet())
     }
 
+    // Quit Anyway is the answer to one exit attempt: when another listener then refused the exit, the next attempt
+    // starts over, and a forced exit that skips the question waits for the saves again.
+    fun testAnExitAttemptStartsOverAfterAnEarlierQuitAnyway() {
+        val release = CountDownLatch(1).also { writeGate = it }
+        try {
+            holdASave()
+            answer(quitAnyway = true)
+            val cancelled = cancelWaitingForSaves()
+            assertTrue(guard.canExitApplication())
+            assertTrue(cancelled.get(30, TimeUnit.SECONDS))
+
+            SaveOnExit().appClosing()
+            val waited = cancelWaitingForSaves()
+            SaveOnExit().appWillBeClosed(false)
+            assertTrue(waited.get(30, TimeUnit.SECONDS))
+        } finally {
+            release.countDown()
+        }
+    }
+
+    // The progress that waits for the uploads can be cancelled: the user is not held for the 15 seconds.
+    fun testWaitingForTheSavesCanBeCancelledThenAsksWhatToDoWithThem() {
+        answer(quitAnyway = false)
+        val release = CountDownLatch(1).also { writeGate = it }
+        try {
+            holdASave()
+            SaveOnExit().appClosing()
+            val cancelled = cancelWaitingForSaves()
+            val start = System.currentTimeMillis()
+
+            assertFalse(guard.canExitApplication())
+
+            assertTrue(cancelled.get(30, TimeUnit.SECONDS))
+            assertTrue(System.currentTimeMillis() - start < NamespaceSaver.EXIT_WAIT_MILLIS)
+            // Asked about the file whose save is still in flight.
+            assertEquals(1, dialogs.size)
+            assertTrue(dialogs.single().contains("/slowwrite.txt"))
+        } finally {
+            release.countDown()
+        }
+    }
+
     // An exit that skipped the prompt still leaves a copy of what the instance did not take.
     fun testExitWithoutThePromptKeepsACopyOfWhatWasRefused() {
-        val saver = NamespaceSaver.instance
-        saver.prompt = Prompt(quit = false)
         refuseSave("/locked.txt")
 
-        saver.finishOnExit()
+        // A forced exit: the platform publishes appClosing, skips the listeners that may refuse, then appWillBeClosed.
+        SaveOnExit().appClosing()
+        SaveOnExit().appWillBeClosed(false)
 
         assertEquals(listOf("y"), keptCopies())
         // Reported once at the next start, then left quiet.
@@ -291,6 +430,30 @@ class NamespaceBrowserTest : KestraTestCase() {
         assertEquals(1, notifications.count { it.content.contains("were not saved to the instance") })
         UnsavedCopies.report(project)
         assertEquals(1, notifications.count { it.content.contains("were not saved to the instance") })
+    }
+
+    // /a/b.txt and /a_b.txt used to become the same file name, and the second copy replaced the first.
+    fun testCopiesOfFilesWhoseNamesFlattenTheSameAreAllKept() {
+        val fs = KestraFileSystem.instance
+        val nested = fs.findFileByPath("$instance/company.team/a/b.txt") as KestraVirtualFile
+        val flat = fs.findFileByPath("$instance/company.team/a_b.txt") as KestraVirtualFile
+
+        UnsavedCopies.keep(listOf(nested to "nested".toByteArray(), flat to "flat".toByteArray()))
+
+        assertEquals(setOf("nested", "flat"), keptCopies().toSet())
+    }
+
+    // The folder of the copies a user was told about does not grow for ever.
+    fun testReportedCopiesAreDeletedAfterAMonth() {
+        val reported = UnsavedCopies.directory.resolve("reported")
+        val old = reported.resolve((System.currentTimeMillis() - java.util.concurrent.TimeUnit.DAYS.toMillis(31)).toString())
+        val recent = reported.resolve((System.currentTimeMillis() - java.util.concurrent.TimeUnit.DAYS.toMillis(1)).toString())
+        listOf(old, recent).forEach { java.nio.file.Files.createDirectories(it) }
+
+        UnsavedCopies.report(project)
+
+        assertFalse(java.nio.file.Files.exists(old))
+        assertTrue(java.nio.file.Files.exists(recent))
     }
 
     private fun keptCopies(): List<String> = java.nio.file.Files.walk(UnsavedCopies.directory).use { paths ->
@@ -348,8 +511,8 @@ class NamespaceBrowserTest : KestraTestCase() {
     // the file read-only and reloads it when the content lands.
     fun testRestoringATabOfAnUnreachableInstanceDoesNotThrowOnABackgroundThread() {
         stored["/slow.txt"] = "the real content"
-        val file = VirtualFileManager.getInstance().findFileByUrl("kestra://$instance/company.team/slow.txt") as KestraVirtualFile
         failReads = true
+        val file = VirtualFileManager.getInstance().findFileByUrl("kestra://$instance/company.team/slow.txt") as KestraVirtualFile
         val restored = restore(file)
         assertEquals(0, restored.size)
         failReads = false
@@ -360,13 +523,11 @@ class NamespaceBrowserTest : KestraTestCase() {
             PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
             assertEquals("", document.text)
             assertFalse(document.isWritable)
-            assertTrue(file.unread)
-            assertThrows(IOException::class.java) { file.getOutputStream(this) }
+            assertFalse(file.isWritable)
 
             gate.release.countDown()
             waitFor { document.text == "the real content" }
             assertTrue(document.isWritable)
-            assertFalse(file.unread)
         } finally {
             gate.release.countDown()
         }
@@ -391,84 +552,139 @@ class NamespaceBrowserTest : KestraTestCase() {
         com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread<ByteArray> { file.contentsToByteArray(true) }.get(60, TimeUnit.SECONDS)
 
     // A tab restored at startup asks for its content before a slow instance answered: the platform turns the
-    // error into a blank document and never asks again, so the file reloads it when the content lands.
-    fun testBlankDocumentOfASlowFileIsReloadedWhenItsContentLands() {
+    // error into a blank document and never asks again. The file is not writable without content, so the document
+    // is read-only, and it is unlocked and filled when the content lands.
+    fun testDocumentOfASlowFileIsReadOnlyUntilItsContentLands() {
         stored["/slow.txt"] = "the real content"
         val gate = Gate().also { readGate = it }
         try {
             val file = VirtualFileManager.getInstance().findFileByUrl("kestra://$instance/company.team/slow.txt") as KestraVirtualFile
             val document = FileDocumentManager.getInstance().getDocument(file)!!
             assertEquals("", document.text)
-            PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
-            // Nothing can be typed into the blank text meanwhile.
+            assertFalse(file.isWritable)
+            // Nothing can be typed into the blank text, so nothing can be saved over the instance's file.
             assertFalse(document.isWritable)
-            assertTrue(file.unread)
+            assertThrows(com.intellij.openapi.editor.ReadOnlyModificationException::class.java) {
+                WriteAction.run<RuntimeException> { document.setText("typed over nothing") }
+            }
+            assertThrows(IOException::class.java) { file.getOutputStream(this) }
 
             gate.release.countDown()
             waitFor { document.text == "the real content" }
 
             assertEquals("the real content", document.text)
             assertTrue(document.isWritable)
-            assertFalse(file.unread)
-        } finally {
-            gate.release.countDown()
-        }
-    }
-
-    // Typed into before the blank text was locked: it cannot overwrite the instance's file, and the user chooses.
-    fun testTextTypedIntoABlankDocumentIsNeverSavedOverTheInstancesFile() {
-        stored["/slow.txt"] = "the real content"
-        val gate = Gate().also { readGate = it }
-        try {
-            val file = VirtualFileManager.getInstance().findFileByUrl("kestra://$instance/company.team/slow.txt") as KestraVirtualFile
-            val document = FileDocumentManager.getInstance().getDocument(file)!!
-            WriteAction.run<RuntimeException> { document.setText("typed over nothing") }
-            assertThrows(IOException::class.java) { file.getOutputStream(this) }
-
-            gate.release.countDown()
-            waitFor { notifications.any { it.title == "Not loaded from Kestra" } }
-            assertEquals("typed over nothing", document.text)
-            assertThrows(IOException::class.java) { file.getOutputStream(this) }
-
-            val notification = notifications.single { it.title == "Not loaded from Kestra" }
-            val reload = notification.actions.single()
-            (reload as com.intellij.notification.NotificationAction).actionPerformed(TestActionEvent.createTestEvent(reload), notification)
-            assertEquals("the real content", document.text)
-            assertFalse(file.unread)
+            assertTrue(file.isWritable)
             assertTrue(kestra.requests.none { it.method == "POST" })
         } finally {
             gate.release.countDown()
         }
     }
 
-    // What was typed while the refresh read the instance's version is not overwritten by it.
-    fun testRefreshDoesNotOverwriteWhatWasTypedDuringIt() {
+    // A failed read is tried again while an editor shows the file: it used to stay locked until a manual Refresh.
+    fun testBlankDocumentIsReadAgainByItselfWhenTheInstanceComesBack() {
+        stored["/retry.txt"] = "the real content"
+        failReads = true
+        val file = VirtualFileManager.getInstance().findFileByUrl("kestra://$instance/company.team/retry.txt") as KestraVirtualFile
+        val document = FileDocumentManager.getInstance().getDocument(file)!!
+        assertEquals("", document.text)
+        assertFalse(document.isWritable)
+        waitFor { notifications.any { it.content.contains("could not be read from the instance yet") } }
+        assertTrue(notifications.toString(), notifications.any { it.content.contains("could not be read from the instance yet") })
+
+        failReads = false
+        waitFor { document.text == "the real content" }
+
+        assertEquals("the real content", document.text)
+        assertTrue(document.isWritable)
+    }
+
+    // A listing that finds the file changed does not replace the text of an editor with unsaved changes, so that
+    // Ctrl+S, even with the instance unreachable for reads, saves what was typed instead of failing in a read,
+    // which counts the document as saved and loses the edit at the next Refresh.
+    fun testListingNeverReplacesAnUnsavedEditor() {
+        val fs = KestraFileSystem.instance
+        val root = fs.root(instance, "company.team")
+        fs.list(root)
+        val readme = fs.findFileByPath("$instance/company.team/README.md") as KestraVirtualFile
+        FileEditorManager.getInstance(project).openFile(readme, true)
+        val document = FileDocumentManager.getInstance().getDocument(readme)!!
+        assertEquals("# Hello", document.text)
+        WriteAction.run<RuntimeException> { document.setText("# typed") }
+        assertTrue(FileDocumentManager.getInstance().isDocumentUnsaved(document))
+
+        modifiedTime = 2
+        stored["/README.md"] = "# Changed on the instance"
+        fs.list(root)
+
+        assertTrue(readme.hasContent)
+        assertTrue(document.isWritable)
+        assertEquals("# typed", document.text)
+
+        failReads = true
+        FileDocumentManager.getInstance().saveDocument(document)
+        waitFor { stored["/README.md"] == "# typed" }
+        assertEquals("# typed", stored["/README.md"])
+        assertFalse(FileDocumentManager.getInstance().isDocumentUnsaved(document))
+    }
+
+    // An open file the listing found changed is locked while it is read again, then shows the new text.
+    fun testRefreshReloadsAChangedOpenFileAndLocksItMeanwhile() {
         val panel = KestraNamespacesPanel(project)
         Disposer.register(testRootDisposable, panel)
+        panel.open("company.team")
+        waitFor { rows(panel).size >= 4 }
         val readme = KestraFileSystem.instance.findFileByPath("$instance/company.team/README.md") as KestraVirtualFile
         FileEditorManager.getInstance(project).openFile(readme, true)
         val document = FileDocumentManager.getInstance().getDocument(readme)!!
-        panel.open("company.team")
-        waitFor { rows(panel).size >= 4 }
-        // The first listing found the file changed on the instance: it has to be read again.
-        assertFalse(readme.hasContent)
+        assertEquals("# Hello", document.text)
+        assertTrue(document.isWritable)
 
+        modifiedTime = 2
         stored["/README.md"] = "# Changed on the instance"
         val gate = Gate().also { readGate = it }
         try {
             val refreshed = panel.refresh()
-            // The listing needs the EDT before it reads the file: wait for the read to start without blocking it.
             waitFor { gate.entered.count == 0L }
             assertEquals(0L, gate.entered.count)
-            WriteAction.run<RuntimeException> { document.setText("# typed during the refresh") }
+            // The text is the old one: nothing may be typed into it while the new one is on its way.
+            assertEquals("# Hello", document.text)
+            assertFalse(document.isWritable)
             gate.release.countDown()
             waitUntilDone(refreshed)
 
-            assertEquals("# typed during the refresh", document.text)
-            assertTrue(FileDocumentManager.getInstance().isDocumentUnsaved(document))
+            assertEquals("# Changed on the instance", document.text)
+            assertTrue(document.isWritable)
         } finally {
             gate.release.countDown()
         }
+    }
+
+    // A read that fails while an open file is reloaded keeps its text, says why, and is read again by itself:
+    // the file is not left locked, and no message pretends it was never read.
+    fun testFailedReloadOfAnOpenFileIsReportedAndReadAgainByItself() {
+        val panel = KestraNamespacesPanel(project)
+        Disposer.register(testRootDisposable, panel)
+        panel.open("company.team")
+        waitFor { rows(panel).size >= 4 }
+        val readme = KestraFileSystem.instance.findFileByPath("$instance/company.team/README.md") as KestraVirtualFile
+        FileEditorManager.getInstance(project).openFile(readme, true)
+        val document = FileDocumentManager.getInstance().getDocument(readme)!!
+
+        modifiedTime = 2
+        stored["/README.md"] = "# Changed on the instance"
+        failReads = true
+        waitUntilDone(panel.refresh())
+
+        assertTrue(notifications.toString(), notifications.any { it.content.contains("Reloading changed namespace files failed") })
+        assertEquals("# Hello", document.text)
+        assertTrue(notifications.toString(), notifications.none { it.title == "Not loaded from Kestra" || it.content.contains("shown empty") })
+
+        failReads = false
+        waitFor { document.text == "# Changed on the instance" }
+
+        assertEquals("# Changed on the instance", document.text)
+        assertTrue(document.isWritable)
     }
 
     fun testExcludedFoldersAreHiddenAndFilesOfAnotherInstanceAreNotListed() {
@@ -573,9 +789,6 @@ class NamespaceBrowserTest : KestraTestCase() {
 
     override fun tearDown() {
         try {
-            // The saver outlives the tests: what a test left refused must not be asked about in the next one.
-            NamespaceSaver.instance.unsyncedFiles().forEach(NamespaceSaver.instance::discard)
-            NamespaceSaver.instance.resetForTests()
             writeGate?.countDown()
             readGate?.release?.countDown()
             runCatching { UnsavedCopies.directory.toFile().deleteRecursively() }

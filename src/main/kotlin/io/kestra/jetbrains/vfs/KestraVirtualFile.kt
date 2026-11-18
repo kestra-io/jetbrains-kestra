@@ -3,6 +3,8 @@ package io.kestra.jetbrains.vfs
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.fileEditor.impl.LoadTextUtil
+import com.intellij.openapi.util.Comparing
 import com.intellij.openapi.util.Condition
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.util.LocalTimeCounter
@@ -17,10 +19,16 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 
 // A file or folder of a namespace on an instance. Its content lives in memory, never on disk: it is
 // read from the instance on first access, and a save keeps the new content and uploads it in the background.
 // The content is kept until the upload succeeded, see NamespaceSaver.
+//
+// The one rule that keeps a blank or stale text from reaching the instance: a file is writable only while it
+// holds content. A document made from a file without content is read-only (FileDocumentManagerBase.getDocument
+// asks isWritable), so nothing can be typed into it and saved over the instance's file; when the content lands the
+// document is unlocked and shows it, see contentLanded.
 class KestraVirtualFile internal constructor(
     private val fs: KestraFileSystem,
     val instance: String,
@@ -40,12 +48,9 @@ class KestraVirtualFile internal constructor(
     @Volatile internal var valid = true
     @Volatile private var stamp = LocalTimeCounter.currentTime()
     @Volatile private var loading: CompletableFuture<ByteArray>? = null
-
-    // True from the moment the platform asked for the content and got an error until the content reached the
-    // editor. LoadTextUtil.loadText swallows that error (it logs at debug level) and hands the editor an empty
-    // text, so the Document is blank and cached: it never asks again. While this is set the file refuses to
-    // be written, a save would replace the instance's file with that blank text.
-    @Volatile internal var unread = false
+    private val retrying = AtomicBoolean()
+    // The reason the document is blank was told to the user, once until the content lands.
+    @Volatile private var explained = false
 
     private val gone = Condition<Any?> { !valid }
 
@@ -53,8 +58,15 @@ class KestraVirtualFile internal constructor(
 
     val isLoaded: Boolean get() = loadedChildren != null
 
-    // False once the instance reported a newer version: the next read fetches it.
+    // False until the content was read, and again once the instance reported a newer version: the next read fetches it.
     val hasContent: Boolean get() = content != null
+
+    // Typed and not saved yet, or saved and not on the instance (yet, or ever): text that only this IDE has.
+    internal val hasLocalChanges: Boolean
+        get() {
+            val documents = FileDocumentManager.getInstance()
+            return documents.getCachedDocument(this)?.let(documents::isDocumentUnsaved) == true || NamespaceSaver.instance.hasUnsyncedChanges(this)
+        }
 
     override fun getName(): String = if (isRoot) namespace else NamespacePaths.name(relativePath)
 
@@ -65,7 +77,7 @@ class KestraVirtualFile internal constructor(
     // namespace/path on the instance, for messages and titles.
     val location: String get() = "$namespace${if (isRoot) "" else relativePath} on ${KestraFileSystem.describe(instance)}"
 
-    override fun isWritable(): Boolean = !directory
+    override fun isWritable(): Boolean = !directory && content != null
 
     override fun isDirectory(): Boolean = directory
 
@@ -81,7 +93,7 @@ class KestraVirtualFile internal constructor(
         try {
             return read()
         } catch (e: IOException) {
-            markUnread()
+            explainBlankDocument()
             throw e
         }
     }
@@ -89,7 +101,7 @@ class KestraVirtualFile internal constructor(
     // EditorsSplitters restores a tab by calling this on a background coroutine, outside any read action, to
     // detect the charset, and logs any exception other than FileTooBigException/cancellation as a plugin error.
     // Its result is discarded and the editor reads the content again afterwards (through the no-argument
-    // method, where a failure is swallowed and handled by markUnread), so a failure here is not reported.
+    // method, where a failure is swallowed and explained), so a failure here is not reported.
     // The empty array is only ever that discarded result: every other caller of this class uses the
     // no-argument method and still gets the IOException.
     override fun contentsToByteArray(cacheContent: Boolean): ByteArray {
@@ -105,10 +117,10 @@ class KestraVirtualFile internal constructor(
 
     // A tab restored at startup is read by the editor on the EDT or under a read action, where a slow
     // instance must not hold the IDE: wait a short while for the read, then give up. It keeps running, and the
-    // editor is reloaded once it landed, see loaded.
+    // document is unlocked and filled once it landed, see contentLanded.
     private fun read(): ByteArray {
         val app = ApplicationManager.getApplication()
-        if (!app.isDispatchThread && !app.isReadAccessAllowed) return loaded(fs.read(this))
+        if (!app.isDispatchThread && !app.isReadAccessAllowed) return fetchAndRetry()
         try {
             return loaded(prefetch().get(UI_THREAD_WAIT_SECONDS, TimeUnit.SECONDS))
         } catch (e: TimeoutException) {
@@ -118,80 +130,125 @@ class KestraVirtualFile internal constructor(
         }
     }
 
-    // The editor is about to show a blank text for this file: keep it from being typed into, as the text could
-    // only be saved over the real content.
-    private fun markUnread() {
-        unread = true
-        // Not guarded by the flag: it may have been set by a read that no document was waiting for.
-        ApplicationManager.getApplication().invokeLater({
-            val documents = FileDocumentManager.getInstance()
-            val document = documents.getCachedDocument(this) ?: return@invokeLater
-            if (!unread || !document.isWritable || documents.isDocumentUnsaved(document)) return@invokeLater
-            document.setReadOnly(true)
-            if (fs.isForeign(this)) {
-                KestraNotifier.info(null, "$location is shown empty and read-only: the IDE is connected to another instance. Open the file again from the Kestra Namespaces tool window.")
-            } else {
-                KestraNotifier.warn(null, "$location could not be read from the instance yet: it stays read-only and opens by itself once it is read.")
-            }
-        }, gone)
-        // The read may have landed between the failure and now, in which case loaded did not see the flag.
-        if (content != null) ApplicationManager.getApplication().invokeLater(::reviveDocument, gone)
+    // The content, read from the instance when it is not here. Background threads only, it waits for the network:
+    // the way to ask for a read that reports its failure.
+    internal fun load(): ByteArray {
+        content?.let { return it }
+        try {
+            return loaded(prefetch().get())
+        } catch (e: ExecutionException) {
+            throw (e.cause as? IOException) ?: IOException(e.cause?.message, e.cause)
+        }
+    }
+
+    private fun fetch(): ByteArray = loaded(fs.read(this))
+
+    // A read that failed starts to be tried again, see retryLater.
+    private fun fetchAndRetry(): ByteArray = try {
+        fetch()
+    } catch (e: IOException) {
+        retryLater()
+        throw e
     }
 
     // The content came in. A save or a newer listing may have set it meanwhile, which then wins.
     private fun loaded(bytes: ByteArray): ByteArray {
         val current = content ?: bytes.also { content = it }
-        if (unread) ApplicationManager.getApplication().invokeLater(::reviveDocument, gone)
+        if (current === bytes) {
+            explained = false
+            ApplicationManager.getApplication().invokeLater(::contentLanded, gone)
+        }
         return current
     }
 
-    // EDT. Replaces the blank text of a document created while the content was not readable.
-    private fun reviveDocument() {
-        if (!unread) return
+    // EDT. Unlocks the document made while the content was missing and shows the content in it, unless that
+    // document holds typed text. The VFS "writable" event cannot do this: DeprecatedVirtualFileSystem.fire*
+    // only reaches this file system's own listeners, and FileDocumentManagerImpl hears property changes of the
+    // VFS_CHANGES events alone.
+    private fun contentLanded() {
         val documents = FileDocumentManager.getInstance()
-        val document = documents.getCachedDocument(this)
-        when {
-            document == null -> unread = false
-            !documents.isDocumentUnsaved(document) -> {
-                unread = false
-                reload(document)
+        val document = documents.getCachedDocument(this) ?: return
+        val bytes = content ?: return
+        if (!document.isWritable) document.setReadOnly(false)
+        if (documents.isDocumentUnsaved(document)) return
+        // Not when it is the same text: a flow is read again at every refresh, and a reload moves the caret.
+        if (!Comparing.equal(document.charsSequence, LoadTextUtil.getTextByBinaryPresentation(bytes, this))) documents.reloadFromDisk(document)
+    }
+
+    // The instance has a newer version: forget the content, so the next read fetches it, and lock the open
+    // document until it does. Unless this IDE holds text the instance does not have. Decided on the EDT, where
+    // typing happens: an edit made a moment ago is seen, and the document never ends up edited and unlocked
+    // without content.
+    internal fun invalidate() {
+        if (directory) return
+        onEdt {
+            if (hasLocalChanges) return@onEdt
+            content = null
+            FileDocumentManager.getInstance().getCachedDocument(this)?.setReadOnly(true)
+        }
+    }
+
+    // EDT. The instance's version replaces whatever the editor holds, typed text included: the user's discard.
+    internal fun adopt(bytes: ByteArray) {
+        content = bytes
+        explained = false
+        val documents = FileDocumentManager.getInstance()
+        documents.getCachedDocument(this)?.let {
+            it.setReadOnly(false)
+            documents.reloadFromDisk(it)
+        }
+    }
+
+    // The editor shows a blank text for a file that could not be read (LoadTextUtil.loadText swallows the error
+    // and logs it at debug level): it is locked, say why.
+    private fun explainBlankDocument() {
+        val foreign = fs.isForeign(this)
+        ApplicationManager.getApplication().invokeLater({
+            // Once, and only for a file an editor shows: the platform may read a file that has no document.
+            if (explained || content != null || FileDocumentManager.getInstance().getCachedDocument(this) == null) return@invokeLater
+            explained = true
+            if (foreign) {
+                KestraNotifier.info(null, "$location is shown empty and read-only: the IDE is connected to another instance. Open the file again from the Kestra Namespaces tool window.")
+            } else {
+                KestraNotifier.warn(null, "$location could not be read from the instance yet: it stays read-only, and is read again until it opens.")
             }
-            // Typed into the blank text before it was locked: keep that text, it is the user's call.
-            else -> NamespaceSaver.instance.offerReload(this)
-        }
+        }, gone)
     }
 
-    // EDT. Replaces the editor's text with the instance's content, dropping what was typed.
-    internal fun reloadDocument() {
-        unread = false
-        FileDocumentManager.getInstance().getCachedDocument(this)?.let(::reload)
+    // A failed read is tried again by itself, so that a file that opened blank does not stay locked until the user
+    // thinks of Refresh: a few seconds later, then less often. It stops when the content landed, the file left, nothing
+    // shows it any more (the next document asks again), or it can never succeed (another instance).
+    private fun retryLater(attempt: Int = 0) {
+        if (attempt == 0 && (fs.isForeign(this) || !retrying.compareAndSet(false, true))) return
+        AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            ApplicationManager.getApplication().executeOnPooledThread {
+                val wanted = content == null && valid && !fs.isForeign(this) && FileDocumentManager.getInstance().getCachedDocument(this) != null
+                if (!wanted) {
+                    retrying.set(false)
+                    return@executeOnPooledThread
+                }
+                try {
+                    fetch()
+                    retrying.set(false)
+                } catch (e: Exception) {
+                    retryLater(attempt + 1)
+                }
+            }
+        }, RETRY_SECONDS[minOf(attempt, RETRY_SECONDS.size - 1)], TimeUnit.SECONDS)
     }
 
-    // FileDocumentManagerImpl.reloadFromDisk leaves the document as writable as it found it, so the lock set by
-    // markUnread has to come off first.
-    private fun reload(document: com.intellij.openapi.editor.Document) {
-        document.setReadOnly(false)
-        FileDocumentManager.getInstance().reloadFromDisk(document)
-    }
-
-    // Forgets the local content and reads the instance's again, then shows it in the editor.
-    internal fun reloadFromInstance() {
-        content = null
-        prefetch().whenComplete { bytes, _ ->
-            if (bytes != null) ApplicationManager.getApplication().invokeLater(::reloadDocument, gone)
-        }
+    private fun onEdt(block: () -> Unit) {
+        val app = ApplicationManager.getApplication()
+        if (app.isDispatchThread) block() else app.invokeLater(block, gone)
     }
 
     // Starts reading the content in the background, once.
     internal fun prefetch(): CompletableFuture<ByteArray> {
         loading?.let { return it }
         return synchronized(this) {
-            loading ?: CompletableFuture.supplyAsync({ fs.read(this) }, AppExecutorUtil.getAppExecutorService()).also { future ->
+            loading ?: CompletableFuture.supplyAsync({ fetchAndRetry() }, AppExecutorUtil.getAppExecutorService()).also { future ->
                 loading = future
-                future.whenComplete { bytes, _ ->
-                    if (bytes != null) loaded(bytes)
-                    loading = null
-                }
+                future.whenComplete { _, _ -> loading = null }
             }
         }
     }
@@ -200,8 +257,9 @@ class KestraVirtualFile internal constructor(
 
     override fun getOutputStream(requestor: Any?, newModificationStamp: Long, newTimeStamp: Long): OutputStream {
         if (directory) throw IOException("$location is a folder")
-        if (unread) {
-            throw IOException("$location was not read from the instance before it was opened, so the editor holds a blank text and saving it would overwrite the file on the instance. Reload it from the instance first.")
+        // A document is read-only without content, see isWritable. This is for a save that is forced some other way.
+        if (content == null) {
+            throw IOException("$location was not read from the instance, so saving would overwrite its file there with a text that is not its content.")
         }
         return object : ByteArrayOutputStream() {
             override fun close() {
@@ -226,6 +284,7 @@ class KestraVirtualFile internal constructor(
 
     private companion object {
         const val UI_THREAD_WAIT_SECONDS = 3L
+        val RETRY_SECONDS = longArrayOf(2, 5, 15, 30, 60)
         private val LOG = Logger.getInstance(KestraVirtualFile::class.java)
     }
 }

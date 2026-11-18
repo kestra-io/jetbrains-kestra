@@ -17,9 +17,9 @@ import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.StoragePathMacros
 import com.intellij.openapi.components.service
+import com.intellij.openapi.components.serviceIfCreated
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptor
-import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.fileEditor.ex.FileEditorManagerEx
@@ -45,6 +45,7 @@ import io.kestra.jetbrains.settings.KestraInstanceListener
 import io.kestra.jetbrains.settings.KestraSettings
 import io.kestra.jetbrains.vfs.KestraFileSystem
 import io.kestra.jetbrains.vfs.KestraVirtualFile
+import io.kestra.jetbrains.vfs.NamespaceSaver
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.io.IOException
@@ -123,6 +124,7 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
             }) { delete() }
                 .also { it.registerCustomShortcutSet(CommonShortcuts.getDelete(), tree) },
             action("Close Namespace", AllIcons.Actions.Close, enabled = { selectedFiles().any { it.isRoot } }) { closeSelected() },
+            action("Discard Local Changes…", AllIcons.Actions.Rollback, enabled = { unsyncedUnderSelection().isNotEmpty() }) { discardLocalChanges() },
         )
         toolbar = ActionManager.getInstance().createActionToolbar("KestraNamespaces", actions, true).also { it.targetComponent = tree }.component
         PopupHandler.installPopupMenu(tree, actions, "KestraNamespacesPopup")
@@ -193,17 +195,16 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
         return listed.thenCompose { reloading ?: CompletableFuture.completedFuture(Unit) }
     }
 
+    // The open files the listing found changed on the instance, and left without content: read again. Each read
+    // that lands shows itself in its editor, see KestraVirtualFile.contentLanded. A file that cannot be read keeps its
+    // old text, locked, and is read again by itself.
     private fun reloadOpenFiles(): CompletableFuture<Unit> {
-        val documents = FileDocumentManager.getInstance()
-        val stale = FileEditorManager.getInstance(project).openFiles.filterIsInstance<KestraVirtualFile>()
-            .filter { it.isValid && !it.hasContent && documents.getCachedDocument(it)?.let(documents::isDocumentUnsaved) == false }
+        val stale = FileEditorManager.getInstance(project).openFiles.filterIsInstance<KestraVirtualFile>().filter { it.isValid && !it.hasContent }
         if (stale.isEmpty()) return CompletableFuture.completedFuture(Unit)
-        return background("Reloading changed namespace files", { stale.forEach { it.contentsToByteArray() } }) {
-            // Checked again: whatever was typed during the read is not the instance's to overwrite.
-            stale.forEach { file ->
-                documents.getCachedDocument(file)?.takeIf { !documents.isDocumentUnsaved(it) }?.let(documents::reloadFromDisk)
-            }
-        }
+        return background("Reloading changed namespace files", {
+            // Every file is tried: one that fails must not leave the others locked.
+            stale.map { runCatching { it.load() } }.firstNotNullOfOrNull { it.exceptionOrNull() }?.let { throw it }
+        }) {}
     }
 
     fun openNamespace() {
@@ -228,13 +229,28 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
         }
     }
 
+    // The selected files, and the files under the selected folders, whose changes the instance has not accepted.
+    private fun unsyncedUnderSelection(): List<KestraVirtualFile> {
+        val selected = selectedFiles()
+        return NamespaceSaver.instance.unsyncedFiles().filter { file -> selected.any { it === file || file.path.startsWith(it.path + "/") } }
+    }
+
+    // Reachable at any time, unlike the buttons of the notification that reported the refused save, which expires.
+    internal fun discardLocalChanges() {
+        val files = unsyncedUnderSelection().ifEmpty { return }
+        val what = files.singleOrNull()?.let { "\"${it.location}\"" } ?: "${files.size} files"
+        if (Messages.showOkCancelDialog(project, "Discard the changes to $what that were not saved to Kestra, and bring back the version of the instance?", "Discard Local Changes",
+                "Discard", Messages.getCancelButton(), Messages.getWarningIcon()) != Messages.OK) return
+        files.forEach(NamespaceSaver.instance::discardChanges)
+    }
+
     private fun closeSelected() {
         selectedFiles().filter { it.isRoot }.forEach { namespaces.remove(it.namespace) }
         rebuildRoots()
     }
 
     // Reads the content in the background, so the editor never waits on the instance.
-    internal fun open(file: KestraVirtualFile) = background("Opening ${file.location}", { file.contentsToByteArray() }) {
+    internal fun open(file: KestraVirtualFile) = background("Opening ${file.location}", { file.load() }) {
         OpenFileDescriptor(project, file).navigate(true)
     }
 
@@ -399,6 +415,7 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
                     else -> {
                         icon = FileTypeManager.getInstance().getFileTypeByFileName(item.name).icon
                         append(item.name)
+                        if (serviceIfCreated<NamespaceSaver>()?.hasUnsyncedChanges(item) == true) append("  not saved to Kestra", SimpleTextAttributes.ERROR_ATTRIBUTES)
                     }
                 }
                 LOADING -> append(LOADING, SimpleTextAttributes.GRAYED_ATTRIBUTES)
