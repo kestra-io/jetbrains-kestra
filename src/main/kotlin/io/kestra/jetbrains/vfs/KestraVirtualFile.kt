@@ -1,6 +1,7 @@
 package io.kestra.jetbrains.vfs
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.util.Condition
 import com.intellij.openapi.vfs.VirtualFile
@@ -85,6 +86,23 @@ class KestraVirtualFile internal constructor(
         }
     }
 
+    // EditorsSplitters restores a tab by calling this on a background coroutine, outside any read action, to
+    // detect the charset, and logs any exception other than FileTooBigException/cancellation as a plugin error.
+    // Its result is discarded and the editor reads the content again afterwards (through the no-argument
+    // method, where a failure is swallowed and handled by markUnread), so a failure here is not reported.
+    // The empty array is only ever that discarded result: every other caller of this class uses the
+    // no-argument method and still gets the IOException.
+    override fun contentsToByteArray(cacheContent: Boolean): ByteArray {
+        if (!cacheContent || directory) return contentsToByteArray()
+        content?.let { return it }
+        return try {
+            read()
+        } catch (e: IOException) {
+            LOG.info("$location could not be read while its tab was restored: ${e.message}")
+            ByteArray(0)
+        }
+    }
+
     // A tab restored at startup is read by the editor on the EDT or under a read action, where a slow
     // instance must not hold the IDE: wait a short while for the read, then give up. It keeps running, and the
     // editor is reloaded once it landed, see loaded.
@@ -103,14 +121,18 @@ class KestraVirtualFile internal constructor(
     // The editor is about to show a blank text for this file: keep it from being typed into, as the text could
     // only be saved over the real content.
     private fun markUnread() {
-        if (unread) return
         unread = true
+        // Not guarded by the flag: it may have been set by a read that no document was waiting for.
         ApplicationManager.getApplication().invokeLater({
             val documents = FileDocumentManager.getInstance()
             val document = documents.getCachedDocument(this) ?: return@invokeLater
-            if (!unread || documents.isDocumentUnsaved(document)) return@invokeLater
+            if (!unread || !document.isWritable || documents.isDocumentUnsaved(document)) return@invokeLater
             document.setReadOnly(true)
-            KestraNotifier.warn(null, "$location could not be read from the instance yet: it stays read-only and opens by itself once it is read.")
+            if (fs.isForeign(this)) {
+                KestraNotifier.info(null, "$location is shown empty and read-only: the IDE is connected to another instance. Open the file again from the Kestra Namespaces tool window.")
+            } else {
+                KestraNotifier.warn(null, "$location could not be read from the instance yet: it stays read-only and opens by itself once it is read.")
+            }
         }, gone)
         // The read may have landed between the failure and now, in which case loaded did not see the flag.
         if (content != null) ApplicationManager.getApplication().invokeLater(::reviveDocument, gone)
@@ -204,5 +226,6 @@ class KestraVirtualFile internal constructor(
 
     private companion object {
         const val UI_THREAD_WAIT_SECONDS = 3L
+        private val LOG = Logger.getInstance(KestraVirtualFile::class.java)
     }
 }

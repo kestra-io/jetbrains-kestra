@@ -37,6 +37,9 @@ class NamespaceBrowserTest : KestraTestCase() {
 
     @Volatile private var readGate: Gate? = null
 
+    // Makes the reads of namespace files fail, as an instance that is down.
+    @Volatile private var failReads = false
+
     // Holds the upload of a file whose name contains "slowwrite", so a save stays in flight.
     @Volatile private var writeGate: CountDownLatch? = null
 
@@ -65,6 +68,7 @@ class NamespaceBrowserTest : KestraTestCase() {
             FakeKestra.respond(exchange, 200, "[$entries]")
         }
         kestra.handle("GET", "/namespaces/company.team/files") { exchange, request ->
+            if (failReads) return@handle FakeKestra.respond(exchange, 500, """{"message":"down"}""")
             readGate?.let {
                 it.entered.countDown()
                 it.release.await(30, TimeUnit.SECONDS)
@@ -338,6 +342,53 @@ class NamespaceBrowserTest : KestraTestCase() {
             gate.release.countDown()
         }
     }
+
+    // EditorsSplitters reads a restored tab on a pooled thread, outside any read action, and reports any exception
+    // as a plugin error (the test framework fails on it): the failure must stay quiet, and the editor then opens
+    // the file read-only and reloads it when the content lands.
+    fun testRestoringATabOfAnUnreachableInstanceDoesNotThrowOnABackgroundThread() {
+        stored["/slow.txt"] = "the real content"
+        val file = VirtualFileManager.getInstance().findFileByUrl("kestra://$instance/company.team/slow.txt") as KestraVirtualFile
+        failReads = true
+        val restored = restore(file)
+        assertEquals(0, restored.size)
+        failReads = false
+
+        val gate = Gate().also { readGate = it }
+        try {
+            val document = FileDocumentManager.getInstance().getDocument(file)!!
+            PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+            assertEquals("", document.text)
+            assertFalse(document.isWritable)
+            assertTrue(file.unread)
+            assertThrows(IOException::class.java) { file.getOutputStream(this) }
+
+            gate.release.countDown()
+            waitFor { document.text == "the real content" }
+            assertTrue(document.isWritable)
+            assertFalse(file.unread)
+        } finally {
+            gate.release.countDown()
+        }
+    }
+
+    fun testRestoringATabOfAnotherInstanceDoesNotThrowOnABackgroundThread() {
+        val other = VirtualFileManager.getInstance().findFileByUrl("kestra://elsewhere:8080/company.team/README.md") as KestraVirtualFile
+        assertEquals(0, restore(other).size)
+
+        val document = FileDocumentManager.getInstance().getDocument(other)!!
+        PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        assertEquals("", document.text)
+        assertFalse(document.isWritable)
+        assertThrows(IOException::class.java) { other.getOutputStream(this) }
+        assertTrue(notifications.any { it.content.contains("connected to another instance") })
+        // The error stays for the callers that rely on it: only the platform's preload is quiet.
+        assertThrows(IOException::class.java) { other.contentsToByteArray() }
+    }
+
+    // What EditorsSplitters.computeFileEntry does: contentsToByteArray(true) on a pooled thread, no read action.
+    private fun restore(file: KestraVirtualFile): ByteArray =
+        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread<ByteArray> { file.contentsToByteArray(true) }.get(60, TimeUnit.SECONDS)
 
     // A tab restored at startup asks for its content before a slow instance answered: the platform turns the
     // error into a blank document and never asks again, so the file reloads it when the content lands.

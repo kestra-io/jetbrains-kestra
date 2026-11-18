@@ -149,6 +149,8 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
         }
     }
 
+    internal fun isForeign(file: KestraVirtualFile) = file.instance != currentInstance()
+
     // The instance a file belongs to must still be the configured one.
     private fun api(file: KestraVirtualFile): NamespaceFilesApi {
         val current = currentInstance()
