@@ -70,7 +70,7 @@ class Flow(val root: Map<String, Any?>) {
             id = prefix + id,
             type = (input["type"] as? String)?.uppercase() ?: "STRING",
             // Kestra inputs are required unless explicitly marked optional.
-            required = text(input["required"]).lowercase() != "false",
+            required = FlowYaml.yaml11(text(input["required"])) != false,
             defaultValue = when (fallback) {
                 null -> ""
                 is String -> fallback

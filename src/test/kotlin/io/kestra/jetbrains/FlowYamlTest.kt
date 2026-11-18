@@ -82,6 +82,95 @@ class FlowYamlTest : BasePlatformTestCase() {
         assertEquals("company.team.42", flow.uid)
     }
 
+    // Kestra keeps ids and values as the text they were written as: 007 is not 7, 1.10 is not 1.1.
+    fun testScalarsOutsideTypedDefaultsKeepTheirText() {
+        val flow = FlowYaml.flow(myFixture.configureByText("raw.yml", """
+            id: 007
+            namespace: 1.10
+            inputs:
+              - id: 1e3
+                type: SELECT
+                values: [1.50, 0123, yes]
+                defaults: 1.50
+              - id: octal
+                type: STRING
+                defaults: 0123
+              - id: nothing
+                type: STRING
+                defaults: null
+              - id: tilde
+                type: STRING
+                defaults: ~
+              - id: quotedNull
+                type: STRING
+                defaults: "null"
+              - id: no
+                type: STRING
+                required: no
+              - id: yes
+                type: STRING
+                required: yes
+            tasks:
+              - id: 7
+                type: io.kestra.plugin.core.log.Log
+        """.trimIndent()))!!
+        assertEquals("1.10.007", flow.uid)
+        assertEquals(listOf("1e3", "octal", "nothing", "tilde", "quotedNull", "no", "yes"), flow.inputIds())
+        assertEquals(listOf("1.50", "0123", "yes"), flow.inputs()[0].values)
+        assertEquals(listOf("1.50", "0123", "", "", "null"), flow.inputs().take(5).map { it.defaultValue })
+        assertEquals(listOf(true, true, true, true, true, false, true), flow.inputs().map { it.required })
+        assertEquals(listOf("7"), flow.taskIds())
+    }
+
+    // Inside a map or list a plain scalar takes the type Kestra's YAML 1.1 parser gives it, and what has no JSON form stays text.
+    fun testTypedDefaultsFollowYaml11() {
+        val flow = FlowYaml.flow(myFixture.configureByText("typed11.yml", """
+            id: t
+            namespace: n
+            inputs:
+              - id: payload
+                type: JSON
+                defaults:
+                  on: on
+                  off: No
+                  nothing: ~
+                  octal: 0123
+                  hex: 0x1F
+                  binary: 0b101
+                  grouped: 1_000
+                  minutes: 1:30
+                  exponent: 1e3
+                  float: 1.50
+                  huge: 1e999
+                  infinite: .inf
+                  quoted: "yes"
+                  text: 08
+                  list: [007, 1.5, true, "x", ~]
+                  big: 123456789012345678901234567890
+            tasks:
+              - id: t
+                type: io.kestra.plugin.core.log.Log
+        """.trimIndent()))!!
+        val json = com.google.gson.JsonParser.parseString(flow.inputs().single().defaultValue).asJsonObject
+        fun field(name: String) = json.get(name)
+        assertEquals(true, field("on").asBoolean)
+        assertEquals(false, field("off").asBoolean)
+        assertNull(field("nothing"))
+        assertEquals(83, field("octal").asInt)
+        assertEquals(31, field("hex").asInt)
+        assertEquals(5, field("binary").asInt)
+        assertEquals(1000, field("grouped").asInt)
+        assertEquals(90, field("minutes").asInt)
+        assertEquals(1000.0, field("exponent").asDouble)
+        assertEquals(1.5, field("float").asDouble)
+        assertEquals("1e999", field("huge").asString)
+        assertEquals(".inf", field("infinite").asString)
+        assertEquals("yes", field("quoted").asString)
+        assertEquals("08", field("text").asString)
+        assertEquals("""[7,1.5,true,"x",null]""", field("list").toString())
+        assertEquals("123456789012345678901234567890", field("big").asBigInteger.toString())
+    }
+
     fun testFindsValidationPaths() {
         val file = myFixture.configureByText("flow.yml", FLOW)
         val element = FlowYaml.find(file, FlowYaml.parsePath("tasks[0].type")) as YAMLKeyValue

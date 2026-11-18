@@ -57,26 +57,81 @@ object FlowYaml {
 
     private val PLUGIN_TYPE = Regex("""[A-Za-z_][\w]*(\.[\w$]+)+""")
 
-    // Maps and sequences become Map/List, scalars their YAML type: `retries: 3` is the number 3, `"3"` the string.
-    // It is what the VS Code extension sends for an input's default, a JSON default must not turn into strings.
+    // Maps and sequences become Map/List, scalars the text they were written as: `id: 007` is the id "007", which
+    // Kestra keeps as text, not the number 7. Only a default is typed, see toDefault.
     fun toValue(value: YAMLValue?): Any? = when (value) {
-        is YAMLMapping -> value.keyValues.associate { it.keyText to toValue(it.value) }
+        is YAMLMapping -> value.keyValues.associate { it.keyText to if (it.keyText in DEFAULTS) toDefault(it.value) else toValue(it.value) }
         is YAMLSequence -> value.items.map { toValue(it.value) }
-        is YAMLScalar -> if (value is YAMLQuotedText || value is YAMLBlockScalar) value.textValue else plain(value.textValue)
+        is YAMLScalar -> value.textValue
         else -> null
     }
 
-    // The YAML 1.2 core schema, as Kestra reads a plain scalar.
-    private fun plain(text: String): Any = when {
-        text == "true" || text == "True" || text == "TRUE" -> true
-        text == "false" || text == "False" || text == "FALSE" -> false
-        INTEGER.matches(text) -> text.toLongOrNull() ?: text.removePrefix("+").toBigInteger()
-        FLOAT.matches(text) -> text.toDouble()
-        else -> text
+    // What an input is prefilled with. A scalar stays its text (`defaults: 0123` is the string "0123"), except a
+    // plain null, which is no default. Inside a map or list the scalars take their YAML type, as the VS Code
+    // extension sends them: a JSON default must not turn into strings.
+    private fun toDefault(value: YAMLValue?): Any? = when (value) {
+        is YAMLScalar -> value.textValue.takeUnless { isPlain(value) && yaml11(it) == null }
+        else -> typed(value)
     }
 
-    private val INTEGER = Regex("[-+]?[0-9]+")
-    private val FLOAT = Regex("[-+]?(\\.[0-9]+|[0-9]+(\\.[0-9]*)?)([eE][-+]?[0-9]+)?")
+    private fun typed(value: YAMLValue?): Any? = when (value) {
+        is YAMLMapping -> value.keyValues.associate { it.keyText to typed(it.value) }
+        is YAMLSequence -> value.items.map { typed(it.value) }
+        is YAMLScalar -> if (isPlain(value)) yaml11(value.textValue) else value.textValue
+        else -> null
+    }
+
+    private fun isPlain(scalar: YAMLScalar) = scalar !is YAMLQuotedText && scalar !is YAMLBlockScalar
+
+    private val DEFAULTS = setOf("defaults", "prefill")
+
+    // A plain scalar as the YAML 1.1 resolver of Kestra's parser (SnakeYAML) types it, so `yes` and `off` are
+    // booleans, `0123` is octal and `~` is null (null here). What does not match stays text, and so does a number
+    // that has no JSON form: `1e999` or `.inf` must not reach Gson, which refuses non-finite numbers.
+    fun yaml11(text: String): Any? {
+        if (text.isEmpty() || text in NULLS) return null
+        if (text in TRUE) return true
+        if (text in FALSE) return false
+        INT.matchEntire(text)?.let { return integer(it) }
+        if (FLOAT.matches(text)) return float(text)?.takeIf { it.isFinite() } ?: text
+        return text
+    }
+
+    private val NULLS = setOf("~", "null", "Null", "NULL")
+    private val TRUE = setOf("yes", "Yes", "YES", "true", "True", "TRUE", "on", "On", "ON")
+    private val FALSE = setOf("no", "No", "NO", "false", "False", "FALSE", "off", "Off", "OFF")
+
+    // The int forms of the 1.1 resolver: binary, octal, decimal, hexadecimal and base 60, `_` allowed in the digits.
+    private val INT = Regex("([-+]?)(?:0b_*([01][01_]*)|0_*([0-7][0-7_]*)|(0|[1-9][0-9_]*)|0x_*([0-9a-fA-F][0-9a-fA-F_]*)|([1-9][0-9_]*(?::[0-5]?[0-9])+))")
+    private val FLOAT = Regex(
+        "[-+]?(?:[0-9][0-9_]*\\.[0-9_]*(?:[eE][-+]?[0-9]+)?|[0-9][0-9_]*[eE][-+]?[0-9]+|\\.[0-9_]+(?:[eE][-+]?[0-9]+)?" +
+            "|[0-9][0-9_]*(?::[0-5]?[0-9])+\\.[0-9_]*|\\.(?:inf|Inf|INF))|\\.(?:nan|NaN|NAN)",
+    )
+
+    private fun integer(match: MatchResult): Any {
+        val (sign, binary, octal, decimal, hex, sexagesimal) = match.destructured
+        fun digits(text: String, radix: Int) = java.math.BigInteger(text.replace("_", ""), radix)
+        val magnitude = when {
+            binary.isNotEmpty() -> digits(binary, 2)
+            octal.isNotEmpty() -> digits(octal, 8)
+            decimal.isNotEmpty() -> digits(decimal, 10)
+            hex.isNotEmpty() -> digits(hex, 16)
+            else -> sexagesimal.replace("_", "").split(':').fold(java.math.BigInteger.ZERO) { sum, part -> sum * java.math.BigInteger.valueOf(60) + part.toBigInteger() }
+        }
+        val number = if (sign == "-") magnitude.negate() else magnitude
+        return if (number.bitLength() < Long.SIZE_BITS) number.toLong() else number
+    }
+
+    // Null for the forms that cannot be a finite number.
+    private fun float(text: String): Double? {
+        val plain = text.replace("_", "")
+        if (plain.contains("inf", ignoreCase = true) || plain.contains("nan", ignoreCase = true)) return null
+        val sign = if (plain.startsWith("-")) -1.0 else 1.0
+        val unsigned = plain.removePrefix("-").removePrefix("+")
+        // Base 60: 1:30.5 is 90.5.
+        if (unsigned.contains(':')) return sign * unsigned.split(':').fold(0.0) { sum, part -> sum * 60 + part.toDouble() }
+        return plain.toDoubleOrNull()
+    }
 
     // A validation path segment selecting a sequence item by its `id`, as Kestra 2.0 reports tasks[my-task].
     data class ById(val id: String)
