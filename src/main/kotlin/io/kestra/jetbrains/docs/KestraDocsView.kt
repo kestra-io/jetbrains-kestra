@@ -18,6 +18,11 @@ import com.intellij.ui.jcef.JBCefJSQuery
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import io.kestra.jetbrains.run.StateBucket
+import org.cef.browser.CefBrowser
+import org.cef.browser.CefFrame
+import org.cef.handler.CefLoadHandlerAdapter
+import org.cef.handler.CefRequestHandlerAdapter
+import org.cef.network.CefRequest
 import java.awt.Color
 import java.awt.datatransfer.StringSelection
 import javax.swing.JComponent
@@ -30,6 +35,10 @@ class KestraDocsView : Disposable {
     private val queue = ArrayList<String>()
     private var ready = false
 
+    // Once the page is shown, nothing may navigate the view: a link the sanitizer let through, a form, a script.
+    // Links are opened by the page itself through the system browser.
+    @Volatile private var pageLoaded = false
+
     val component: JComponent get() = browser.component
 
     init {
@@ -39,6 +48,17 @@ class KestraDocsView : Disposable {
             handle(message)
             null
         }
+        // Registered before the page loads: the handler lets that one navigation through and cancels every other.
+        browser.jbCefClient.addRequestHandler(object : CefRequestHandlerAdapter() {
+            override fun onBeforeBrowse(cefBrowser: CefBrowser?, frame: CefFrame?, request: CefRequest?, userGesture: Boolean, isRedirect: Boolean) = pageLoaded
+
+            override fun onOpenURLFromTab(cefBrowser: CefBrowser?, frame: CefFrame?, targetUrl: String?, userGesture: Boolean) = true
+        }, browser.cefBrowser)
+        browser.jbCefClient.addLoadHandler(object : CefLoadHandlerAdapter() {
+            override fun onLoadingStateChange(cefBrowser: CefBrowser?, isLoading: Boolean, canGoBack: Boolean, canGoForward: Boolean) {
+                if (!isLoading) pageLoaded = true
+            }
+        }, browser.cefBrowser)
         browser.loadHTML(page("window.kestraPost = function (msg) { ${query.inject("msg")} };"))
     }
 

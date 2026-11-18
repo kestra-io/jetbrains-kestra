@@ -445,9 +445,16 @@
         return element;
     }
 
+    // Server content is rendered with markdown-it's html option on. DOMPurify keeps form controls, image maps
+    // and <style> by default: they can submit or navigate the view away, which the click guard below does not see.
+    const SANITIZE = {
+        FORBID_TAGS: ['form', 'button', 'input', 'textarea', 'select', 'option', 'area', 'map', 'style', 'link', 'meta', 'base'],
+        FORBID_ATTR: ['formaction', 'action']
+    };
+
     function display(view) {
         heading.textContent = view.title;
-        content.innerHTML = DOMPurify.sanitize(view.html);
+        content.innerHTML = DOMPurify.sanitize(view.html, SANITIZE);
         transformTables();
         addCopyButtons();
         showCrumbs(view.crumbs || []);
