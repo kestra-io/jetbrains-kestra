@@ -75,13 +75,23 @@ class NamespaceUploadTest : KestraTestCase() {
         val vfs = LocalFileSystem.getInstance()
         val files = names.map { LocalFile(vfs.refreshAndFindFileByIoFile(File(root, it))!!, "dir/$it") }
 
+        // The upload reports its outcome once it stopped: after that nothing more can be sent.
+        val reports = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val recorder = object : com.intellij.notification.Notifications {
+            override fun notify(notification: com.intellij.notification.Notification) {
+                reports += notification.content
+            }
+        }
+        project.messageBus.connect(testRootDisposable).subscribe(com.intellij.notification.Notifications.TOPIC, recorder)
+        com.intellij.openapi.application.ApplicationManager.getApplication().messageBus.connect(testRootDisposable)
+            .subscribe(com.intellij.notification.Notifications.TOPIC, recorder)
         NamespaceUpload.run(project, "company.team", files, "/base")
         val deadline = System.currentTimeMillis() + 10_000
-        while (calls < 2 && System.currentTimeMillis() < deadline) {
+        while (reports.none { it.startsWith("Uploaded 1 of 3 files") } && System.currentTimeMillis() < deadline) {
             PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
             Thread.sleep(20)
         }
-        Thread.sleep(200)
+        assertTrue(reports.toString(), reports.any { it.startsWith("Uploaded 1 of 3 files") })
 
         val uploads = kestra.requests.filter { it.method == "POST" }
         assertEquals(listOf("/namespaces/company.team/files?path=/base/dir/a.txt", "/namespaces/company.team/files?path=/base/dir/secret.txt"), uploads.map { it.path })

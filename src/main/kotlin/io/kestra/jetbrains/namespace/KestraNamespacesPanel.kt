@@ -49,6 +49,7 @@ import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.io.IOException
 import javax.swing.JTree
+import java.util.concurrent.CompletableFuture
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
 import javax.swing.tree.TreePath
@@ -175,9 +176,11 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
     }
 
     // Lists again every folder already listed, then reloads the open files that changed on the instance.
-    fun refresh() {
+    // Completes once the tree and the open files were updated.
+    fun refresh(): CompletableFuture<Unit> {
         val roots = root.children().toList().mapNotNull { (it as DefaultMutableTreeNode).userObject as? KestraVirtualFile }
-        background("Refreshing Kestra namespaces", {
+        var reloading: CompletableFuture<Unit>? = null
+        val listed = background("Refreshing Kestra namespaces", {
             fun walk(dir: KestraVirtualFile) {
                 if (!dir.isLoaded) return
                 fs.list(dir).filter { it.isDirectory }.forEach(::walk)
@@ -185,17 +188,21 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
             roots.forEach { if (it.isLoaded) walk(it) else fs.list(it) }
         }) {
             roots.forEach(::rebuild)
-            reloadOpenFiles()
+            reloading = reloadOpenFiles()
         }
+        return listed.thenCompose { reloading ?: CompletableFuture.completedFuture(Unit) }
     }
 
-    private fun reloadOpenFiles() {
+    private fun reloadOpenFiles(): CompletableFuture<Unit> {
         val documents = FileDocumentManager.getInstance()
         val stale = FileEditorManager.getInstance(project).openFiles.filterIsInstance<KestraVirtualFile>()
             .filter { it.isValid && !it.hasContent && documents.getCachedDocument(it)?.let(documents::isDocumentUnsaved) == false }
-        if (stale.isEmpty()) return
-        background("Reloading changed namespace files", { stale.forEach { it.contentsToByteArray() } }) {
-            stale.forEach { file -> documents.getCachedDocument(file)?.let(documents::reloadFromDisk) }
+        if (stale.isEmpty()) return CompletableFuture.completedFuture(Unit)
+        return background("Reloading changed namespace files", { stale.forEach { it.contentsToByteArray() } }) {
+            // Checked again: whatever was typed during the read is not the instance's to overwrite.
+            stale.forEach { file ->
+                documents.getCachedDocument(file)?.takeIf { !documents.isDocumentUnsaved(it) }?.let(documents::reloadFromDisk)
+            }
         }
     }
 
@@ -231,16 +238,18 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
         OpenFileDescriptor(project, file).navigate(true)
     }
 
-    internal fun create(directory: Boolean) {
-        val parent = targetFolder() ?: return
+    // Completes once the file was created, or reported as not created.
+    internal fun create(directory: Boolean): CompletableFuture<Unit> {
+        val done = CompletableFuture.completedFuture(Unit)
+        val parent = targetFolder() ?: return done
         val flow = fs.isFlowsFolder(parent)
-        if (flow && directory) return
+        if (flow && directory) return done
         val kind = if (directory) "Folder" else if (flow) "Flow" else "File"
         val prompt = if (flow) "File name, the flow id followed by .yml:" else "Name:"
-        val name = Messages.showInputDialog(project, prompt, "New $kind in ${parent.location}", null, if (flow) ".yml" else "", nameValidator(parent))?.trim() ?: return
+        val name = Messages.showInputDialog(project, prompt, "New $kind in ${parent.location}", null, if (flow) ".yml" else "", nameValidator(parent))?.trim() ?: return done
         val path = NamespacePaths.join(parent.relativePath, name)
         val template = flowTemplate(name.removeSuffix(".yml"), parent.namespace)
-        background("Creating ${parent.namespace}$path", {
+        return background("Creating ${parent.namespace}$path", {
             // Asked to the instance: the tree only knows the folders that were expanded, and the server
             // overwrites an existing file, or replaces an existing flow, without a word.
             if (exists(parent, name, flow)) throw KestraApiException("${parent.namespace}$path already exists")
@@ -331,23 +340,31 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
     private fun KestraVirtualFile.parentFile() = parent as? KestraVirtualFile
 
     // Runs the network part off the EDT, then the UI part on it. Failures are reported, never thrown.
-    private fun <T> background(title: String, work: () -> T, then: (T) -> Unit) {
+    // The future completes once the UI part ran, or the failure was reported.
+    private fun <T> background(title: String, work: () -> T, then: (T) -> Unit): CompletableFuture<Unit> {
+        val done = CompletableFuture<Unit>()
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = try {
                 Result.success(work())
             } catch (e: KestraUnauthorizedException) {
                 KestraNotifier.signInRequired(project, "${e.origin} requires authentication. Sign in to reach its namespaces.")
+                done.complete(Unit)
                 return@executeOnPooledThread
             } catch (e: Exception) {
                 Result.failure(e)
             }
             ApplicationManager.getApplication().invokeLater({
-                result.onSuccess(then).onFailure {
-                    val reason = (it as? IOException)?.cause?.message ?: it.message ?: it.javaClass.simpleName
-                    KestraNotifier.error(project, "$title failed: $reason")
+                try {
+                    result.onSuccess(then).onFailure {
+                        val reason = (it as? IOException)?.cause?.message ?: it.message ?: it.javaClass.simpleName
+                        KestraNotifier.error(project, "$title failed: $reason")
+                    }
+                } finally {
+                    done.complete(Unit)
                 }
             }, project.disposed)
         }
+        return done
     }
 
     private fun action(text: String, icon: javax.swing.Icon, enabled: () -> Boolean = { true }, perform: () -> Unit) =

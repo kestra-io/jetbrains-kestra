@@ -75,9 +75,14 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
                 it.modified = entry.modified
             }
         }
-        dir.loadedChildren?.filter { it !in children }?.forEach(::forget)
-        dir.loadedChildren = children
-        return children
+        // What left the instance is forgotten, unless it holds changes the instance has not accepted: they stay
+        // until the user discards them, or a save goes through (which recreates the file).
+        val gone = dir.loadedChildren.orEmpty().filter { it !in children }
+        val kept = gone.filter(::holdsUnsyncedChanges)
+        (gone - kept.toSet()).forEach(::forget)
+        val all = if (kept.isEmpty()) children else (children + kept).sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+        dir.loadedChildren = all
+        return all
     }
 
     internal fun read(file: KestraVirtualFile): ByteArray = io {
@@ -128,6 +133,10 @@ class KestraFileSystem : DeprecatedVirtualFileSystem() {
     fun isFlow(file: KestraVirtualFile) = !file.isDirectory && NamespacePaths.parent(file.relativePath) == "/$FLOWS"
 
     fun flowId(file: KestraVirtualFile) = file.name.substringBeforeLast('.')
+
+    // The file, or a file under it when it is a folder.
+    private fun holdsUnsyncedChanges(file: KestraVirtualFile) =
+        NamespaceSaver.instance.unsyncedFiles().any { it === file || it.path.startsWith(file.path + "/") }
 
     private fun forget(file: KestraVirtualFile) {
         files.entries.removeIf { (key, known) ->
