@@ -56,6 +56,37 @@ class DocsTest : KestraTestCase() {
         assertNull(DocsApi.frontmatterTitle("# No frontmatter\ntitle: not this"))
     }
 
+    // The page's messages come from JavaScript: a malformed field must not throw on the browser's thread.
+    fun testMessagesFromThePageAreParsedDefensively() {
+        val request = KestraDocsView.parse("""{"id":3,"op":"definition","args":{"type":"a.B"}}""")!!
+        assertEquals("definition", request.op)
+        assertEquals(3, request.id)
+        assertEquals("a.B", request.args.get("type").asString)
+
+        assertNull(KestraDocsView.parse("""{"id":"not a number","op":"definition"}""")!!.id)
+        assertNull(KestraDocsView.parse("""{"id":{"x":1},"op":"definition"}""")!!.id)
+        assertTrue(KestraDocsView.parse("""{"op":"open","args":"nope"}""")!!.args.size() == 0)
+        assertNull(KestraDocsView.parse("""{"op":{"nested":true}}"""))
+        assertNull(KestraDocsView.parse("[1,2]"))
+        assertNull(KestraDocsView.parse("not json"))
+    }
+
+    // The plugin browser's rows are built by docs.js and go through the same sanitizer as the server's markdown.
+    // No JavaScript engine runs in these tests, so this checks the two against each other: nothing docs.js builds
+    // itself may use a tag the sanitizer strips (a <button> row once made every row unclickable).
+    fun testHtmlBuiltByThePageSurvivesItsSanitizer() {
+        val js = DocsTest::class.java.getResource("/docs/docs.js")!!.readText()
+        val forbidden = Regex("FORBID_TAGS:\\s*\\[([^\\]]*)]").find(js)!!.groupValues[1].split(',').map { it.trim().trim('\'') }.toSet()
+        assertTrue(forbidden.toString(), "button" in forbidden)
+
+        val built = js.substringAfter("// ---------- Plugin pages ----------").substringBefore("// ---------- Page ----------")
+        val used = built.lines().filter { !it.trim().startsWith("//") }
+            .flatMap { line -> Regex("<([a-zA-Z][a-zA-Z0-9]*)[\\s>/]").findAll(line).map { it.groupValues[1].lowercase() }.toList() }.toSet()
+        assertTrue(used.toString(), "div" in used && "span" in used)
+        assertEquals(emptySet<String>(), used.intersect(forbidden))
+        assertTrue(js.contains("role=\"button\""))
+    }
+
     fun testPageBundlesItsLibraries() {
         val html = KestraDocsView.page("window.kestraPost = function () {};")
         listOf("markdown-it 14.3.3", "markdown-it-container 4.0.0", "DOMPurify 3.4.17", "window.kestraDocs", ".nav-row").forEach { assertTrue(it, html.contains(it)) }

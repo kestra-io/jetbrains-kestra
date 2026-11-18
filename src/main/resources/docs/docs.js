@@ -148,10 +148,11 @@
     }
 
     function navRow(nav, iconKey, label, subtitle) {
-        return `<button class="nav-row" data-nav="${escapeHtml(nav)}">`
+        // Not a <button>: this HTML goes through the sanitizer below, which strips buttons.
+        return `<div class="nav-row" role="button" tabindex="0" data-nav="${escapeHtml(nav)}">`
             + iconImg('row-icon', iconKey)
             + `<span class="row-label">${escapeHtml(label)}${subtitle ? `<span class="row-sub">${escapeHtml(subtitle)}</span>` : ''}</span>`
-            + '<span class="chev">›</span></button>';
+            + '<span class="chev">›</span></div>';
     }
 
     function renderPluginList(entries) {
@@ -612,6 +613,15 @@
         }
     });
 
+    // Rows that are not buttons are activated from the keyboard like one.
+    document.addEventListener('keydown', event => {
+        const row = event.target.closest && event.target.closest('.nav-row[data-nav]');
+        if (row && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            navigate(row.dataset.nav);
+        }
+    });
+
     // Every link is handled here: the embedded browser must never navigate away from the page.
     document.addEventListener('click', event => {
         const target = event.target;
@@ -621,9 +631,11 @@
             return;
         }
         const anchor = target.closest('a');
-        const href = anchor && anchor.getAttribute('href');
-        if (!href) return;
+        if (!anchor) return;
+        // An anchor inside an <svg> keeps its target in xlink:href, which the view must not follow either.
+        const href = anchor.getAttribute('href') || anchor.getAttribute('xlink:href');
         event.preventDefault();
+        if (!href) return;
         if (href.startsWith('#')) {
             const id = decodeURIComponent(href.slice(1));
             const anchorTarget = document.getElementById(id) || document.getElementsByName(id)[0];

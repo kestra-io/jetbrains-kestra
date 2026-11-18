@@ -263,6 +263,7 @@ summary {
     display: flex;
     align-items: center;
     gap: var(--ks-spacing-3);
+    box-sizing: border-box;
     width: 100%;
     margin: var(--ks-spacing-2) 0;
     padding: var(--ks-spacing-3);
@@ -272,6 +273,9 @@ summary {
     border: 1px solid var(--ks-border-default);
     border-radius: var(--ks-radius-base);
     cursor: pointer;
+}
+.nav-row:focus-visible {
+    outline: 2px solid var(--ks-border-focus);
 }
 .nav-row:hover {
     background: var(--ks-bg-hover);

@@ -35,8 +35,10 @@ class KestraDocsView : Disposable {
     private val queue = ArrayList<String>()
     private var ready = false
 
-    // Once the page is shown, nothing may navigate the view: a link the sanitizer let through, a form, a script.
-    // Links are opened by the page itself through the system browser.
+    // Once the page has loaded, nothing may navigate the view: a link the sanitizer let through, a form, a script.
+    // Links are opened by the page itself through the system browser. Until that first load is over every
+    // navigation is allowed, not only one: the embedded browser may take several requests to load the page, and
+    // cancelling one of them leaves a blank view.
     @Volatile private var pageLoaded = false
 
     val component: JComponent get() = browser.component
@@ -48,7 +50,7 @@ class KestraDocsView : Disposable {
             handle(message)
             null
         }
-        // Registered before the page loads: the handler lets that one navigation through and cancels every other.
+        // Registered before the page loads: until it has, navigations go through; afterwards every one is cancelled.
         browser.jbCefClient.addRequestHandler(object : CefRequestHandlerAdapter() {
             override fun onBeforeBrowse(cefBrowser: CefBrowser?, frame: CefFrame?, request: CefRequest?, userGesture: Boolean, isRedirect: Boolean) = pageLoaded
 
@@ -63,10 +65,8 @@ class KestraDocsView : Disposable {
     }
 
     private fun handle(message: String) {
-        val json = runCatching { JsonParser.parseString(message).asJsonObject }.getOrNull() ?: return
-        val args = json.getAsJsonObject("args") ?: JsonObject()
-        val id = json.get("id")?.asInt
-        when (val op = json.get("op")?.asString) {
+        val (op, id, args) = parse(message) ?: return
+        when (op) {
             "ready" -> ApplicationManager.getApplication().invokeLater {
                 ready = true
                 execute("kestraDocs.setTheme(${theme()})")
@@ -74,11 +74,10 @@ class KestraDocsView : Disposable {
                 queue.forEach(::execute)
                 queue.clear()
             }
-            "open" -> args.get("url")?.asString?.takeIf { it.startsWith("https://") || it.startsWith("http://") }?.let(BrowserUtil::browse)
+            "open" -> args.text("url")?.takeIf { it.startsWith("https://") || it.startsWith("http://") }?.let(BrowserUtil::browse)
             "copy" -> ApplicationManager.getApplication().invokeLater {
-                CopyPasteManager.getInstance().setContents(StringSelection(args.get("text")?.asString.orEmpty()))
+                CopyPasteManager.getInstance().setContents(StringSelection(args.text("text").orEmpty()))
             }
-            null -> Unit
             else -> if (id != null) ApplicationManager.getApplication().executeOnPooledThread {
                 val result = DocsApi.handle(op, args)
                 execute("kestraDocs.resolve($id, $result)")
@@ -99,7 +98,21 @@ class KestraDocsView : Disposable {
 
     override fun dispose() = Unit
 
+    // What the page sends: {"op": "...", "id": 1, "args": {...}}. Anything else in it is the page's own problem, it
+    // must not throw on the browser's thread: a malformed field is as good as a missing one.
+    internal data class Message(val op: String, val id: Int?, val args: JsonObject)
+
     companion object {
+        internal fun parse(message: String): Message? {
+            val json = runCatching { JsonParser.parseString(message) }.getOrNull()?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+            val op = json.text("op") ?: return null
+            val id = json.get("id")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.let { runCatching { it.asInt }.getOrNull() }
+            val args = json.get("args")?.takeIf { it.isJsonObject }?.asJsonObject ?: JsonObject()
+            return Message(op, id, args)
+        }
+
+        private fun JsonObject.text(name: String) = get(name)?.takeIf { it.isJsonPrimitive }?.asString
+
         fun page(bridge: String): String {
             fun resource(name: String) = KestraDocsView::class.java.getResource("/docs/$name")!!.readText()
             return resource("docs.html")
