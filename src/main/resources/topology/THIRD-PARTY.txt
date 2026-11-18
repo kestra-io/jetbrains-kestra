@@ -20,7 +20,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-== cytoscape-dagre 4.0.0, which includes dagre (https://github.com/cytoscape/cytoscape.js-dagre, https://github.com/dagrejs/dagre)
+== cytoscape-dagre 3.0.0, which includes dagre (https://github.com/cytoscape/cytoscape.js-dagre, https://github.com/dagrejs/dagre)
 
 
 Copyright (c) 2016-2018, 2020, 2022, 2026, The Cytoscape Consortium.
