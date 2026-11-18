@@ -67,6 +67,9 @@ class TopologyTest : KestraTestCase() {
         myFixture.configureByText("flow.yml", FLOW)
         val (service, recorder) = attached()
 
+        // Drawn at once without the icons not fetched yet, then again with them.
+        assertFalse(recorder.elements!!.contains("data:image/svg+xml;base64,PHN2Zy8+"))
+        waitFor { recorder.calls.size >= 2 }
         val elements = recorder.elements!!
         assertTrue(elements, elements.contains("data:image/svg+xml;base64,PHN2Zy8+"))
         assertEquals(FLOW, kestra.requests.single { it.path == "/flows/graph" }.body)
@@ -78,8 +81,8 @@ class TopologyTest : KestraTestCase() {
         service.runStarted("company.team.hello")
         service.taskState("company.team.hello", "greet", "FAILED")
         service.taskState("company.team.other", "greet", "SUCCESS")
-        waitFor { recorder.calls.size >= 3 }
-        assertEquals(listOf("render", "reset", "state greet failed"), recorder.calls)
+        waitFor { recorder.calls.size >= 4 }
+        assertEquals(listOf("render", "render", "reset", "state greet failed"), recorder.calls)
 
         service.reveal("greet")
         val line = myFixture.editor.document.getLineNumber(myFixture.editor.caretModel.offset)

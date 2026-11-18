@@ -66,6 +66,20 @@ class ValidationTest : KestraTestCase() {
         assertEquals("unknownProp:", textOf("Validation error: Unrecognized"))
     }
 
+    // A refused or failed call is not a verdict: the errors found before stay until a call succeeds.
+    fun testFailedValidationKeepsTheLastErrors() {
+        kestra.json("POST", "/flows/validate") { """[{"constraints":"tasks[0].type: Invalid type: x"}]""" }
+        myFixture.configureByText("flow.yml", FLOW)
+        assertTrue(myFixture.doHighlighting().any { it.description?.startsWith("tasks[0].type") == true })
+
+        kestra.json("POST", "/flows/validate", status = 500) { """{"message":"down"}""" }
+        myFixture.editor.caretModel.moveToOffset(myFixture.file.textLength)
+        myFixture.type("# edited\n")
+        val highlights = myFixture.doHighlighting()
+        assertTrue(kestra.requests.count { it.path == "/flows/validate" } >= 2)
+        assertTrue(highlights.any { it.description?.startsWith("tasks[0].type") == true })
+    }
+
     fun testNonFlowYamlIsNotSent() {
         kestra.json("POST", "/flows/validate") { "[]" }
         myFixture.configureByText("compose.yml", "services:\n  web: {}\n")

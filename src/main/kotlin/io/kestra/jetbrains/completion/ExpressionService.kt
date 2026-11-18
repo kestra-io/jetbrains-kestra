@@ -1,5 +1,6 @@
 package io.kestra.jetbrains.completion
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
@@ -13,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 // Instance data behind {{ }} completion, cached so typing does not hit the instance on every key.
 @Service(Service.Level.APP)
-class ExpressionService {
+class ExpressionService : Disposable {
     private class CachedContext(val key: String, val structure: String, val at: Long, val context: ExpressionContext)
 
     @Volatile private var filters: List<String>? = null
@@ -23,8 +24,10 @@ class ExpressionService {
     @Volatile private var unsupportedUntil = 0L
 
     init {
-        ApplicationManager.getApplication().messageBus.connect().subscribe(KestraSettings.TOPIC, KestraInstanceListener { reset() })
+        ApplicationManager.getApplication().messageBus.connect(this).subscribe(KestraSettings.TOPIC, KestraInstanceListener { reset() })
     }
+
+    override fun dispose() = Unit
 
     fun reset() {
         filters = null

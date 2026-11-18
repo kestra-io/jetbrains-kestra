@@ -114,11 +114,17 @@ class KestraTopologyService(private val project: Project) : Disposable {
                     is Load.Failed -> if (lastFile != url || lastGraph == null || result.always) notice(result.message)
                 }
             }, project.disposed)
+            // The graph is drawn with the icons already known; the others follow once fetched.
+            val withIcons = (result as? Load.Graph)?.withIcons?.invoke() ?: return@executeOnPooledThread
+            ApplicationManager.getApplication().invokeLater({
+                if (current == seq.get() && this.renderer === renderer) show(key, url, flowUid, withIcons)
+            }, project.disposed)
         }
     }
 
     private sealed interface Load {
-        class Graph(val elements: String) : Load
+        // withIcons fetches the missing icons (network) and returns the graph again, null when none is missing.
+        class Graph(val elements: String, val withIcons: (() -> String?)? = null) : Load
         class Failed(val message: String, val always: Boolean = false) : Load
     }
 
@@ -128,7 +134,12 @@ class KestraTopologyService(private val project: Project) : Disposable {
         val types = FlowGraph.elements(graph, emptyMap())?.pluginTypes
         when {
             !response.ok || types == null -> Load.Failed("The topology could not be generated: ${response.message()}")
-            else -> Load.Graph(FlowGraph.elements(graph, PluginIcons.instance.icons(types))!!.json.toString())
+            else -> {
+                val icons = PluginIcons.instance
+                Load.Graph(FlowGraph.elements(graph, icons.cached(types))!!.json.toString(), if (icons.hasMissing(types)) {
+                    { FlowGraph.elements(graph, icons.icons(types))?.json?.toString() }
+                } else null)
+            }
         }
     } catch (_: KestraNotConfiguredException) {
         Load.Failed("Set the Kestra instance URL in Settings | Tools | Kestra to preview the topology.", always = true)
