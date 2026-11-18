@@ -1,5 +1,6 @@
 package io.kestra.jetbrains.actions
 
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
@@ -13,6 +14,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.ValidationInfo
+import com.intellij.ui.InplaceButton
 import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
@@ -26,8 +28,10 @@ import io.kestra.jetbrains.settings.KestraConfigurable
 import io.kestra.jetbrains.settings.KestraCredential
 import io.kestra.jetbrains.settings.KestraCredentials
 import io.kestra.jetbrains.settings.KestraSettings
+import java.awt.BorderLayout
 import javax.swing.JComponent
 import javax.swing.JLabel
+import javax.swing.JPanel
 
 class SignInAction : DumbAwareAction() {
     override fun actionPerformed(e: AnActionEvent) = signIn(e.project)
@@ -104,6 +108,12 @@ private class SignInDialog(project: Project?, private val url: String, stored: K
     private val secret = JBPasswordField()
     private val secretLabel = JLabel()
     private val usernameLabel = JLabel("Username:")
+    private val hiddenEchoChar = secret.echoChar
+    private val revealButton = InplaceButton("Show", AllIcons.Actions.Show) { toggleReveal() }
+    private val secretRow = JPanel(BorderLayout(4, 0)).apply {
+        add(secret, BorderLayout.CENTER)
+        add(revealButton, BorderLayout.EAST)
+    }
 
     init {
         title = "Sign In to Kestra"
@@ -118,6 +128,14 @@ private class SignInDialog(project: Project?, private val url: String, stored: K
 
     private fun selectedKind() = kind.selectedItem as AuthKind
 
+    private fun isRevealed() = secret.echoChar == 0.toChar()
+
+    private fun toggleReveal() {
+        secret.echoChar = if (isRevealed()) hiddenEchoChar else 0.toChar()
+        revealButton.toolTipText = if (isRevealed()) "Hide" else "Show"
+        secret.requestFocusInWindow()
+    }
+
     private fun refresh() {
         val basic = selectedKind() == AuthKind.BASIC
         username.isVisible = basic
@@ -129,7 +147,7 @@ private class SignInDialog(project: Project?, private val url: String, stored: K
         .addLabeledComponent("Instance:", JLabel(url))
         .addLabeledComponent("Authentication:", kind)
         .addLabeledComponent(usernameLabel, username)
-        .addLabeledComponent(secretLabel, secret)
+        .addLabeledComponent(secretLabel, secretRow)
         .panel
 
     override fun getPreferredFocusedComponent(): JComponent = if (selectedKind() == AuthKind.BASIC) username else secret
