@@ -33,7 +33,7 @@ object DocsApi {
             "definition" -> definition(args.get("type").asString)
             "subgroups" -> instance("/plugins/groups/subgroups")
             "icons" -> JsonObject().apply {
-                PluginIcons.instance.icons(args.getAsJsonArray("keys").map { it.asString }).forEach { (key, uri) -> addProperty(key, uri) }
+                PluginIcons.instance.icons(iconKeys(args)).forEach { (key, uri) -> addProperty(key, uri) }
             }
             else -> JsonNull.INSTANCE
         }
@@ -41,6 +41,12 @@ object DocsApi {
         if (e !is IOException && e !is KestraApiException) logger<DocsApi>().warn("Documentation request $op failed", e)
         JsonNull.INSTANCE
     }
+
+    // Each key is a request to the instance and a permanent cache entry: bounded, and only what looks like a
+    // plugin type or group, whatever the page asks for.
+    internal fun iconKeys(args: JsonObject): List<String> = args.get("keys")?.takeIf { it.isJsonArray }?.asJsonArray?.toList().orEmpty()
+        .mapNotNull { it.takeIf { key -> key.isJsonPrimitive && key.asJsonPrimitive.isString }?.asString?.takeIf(ICON_KEY::matches) }
+        .distinct().take(MAX_ICON_KEYS)
 
     // Copy of the docs landing page of the Kestra editor.
     fun home(): String = DocsApi::class.java.getResource("/docs/basic.md")!!.readText()
@@ -101,6 +107,9 @@ object DocsApi {
     }
 
     private fun encodePath(path: String) = path.trim('/').split('/').joinToString("/") { KestraUrls.segment(it) }
+
+    private const val MAX_ICON_KEYS = 50
+    private val ICON_KEY = Regex("[\\w.$-]{1,200}")
 
     private const val TIMEOUT = 15_000
 }

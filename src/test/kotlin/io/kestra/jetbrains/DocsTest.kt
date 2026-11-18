@@ -50,6 +50,41 @@ class DocsTest : KestraTestCase() {
         assertTrue(kestra.requests.any { it.path == "/plugins/io.kestra.plugin.core.log.Log" })
     }
 
+    // The page can be fed any key by the server's HTML: only plausible ones, a bounded number, reach the instance.
+    fun testIconKeysFromThePageAreBounded() {
+        PluginIcons.instance.clear()
+        val keys = (1..120).map { "io.kestra.plugin.p$it" } + listOf("../../etc/passwd", "a b", "x".repeat(300), "io.kestra.plugin.p1")
+        val args = JsonObject().apply { add("keys", com.google.gson.JsonArray().also { array -> keys.forEach(array::add) }) }
+
+        assertEquals((1..50).map { "io.kestra.plugin.p$it" }, DocsApi.iconKeys(args))
+        assertEquals(emptyList<String>(), DocsApi.iconKeys(JsonParser.parseString("""{"keys":"nope"}""").asJsonObject))
+        assertEquals(listOf("a.B"), DocsApi.iconKeys(JsonParser.parseString("""{"keys":[1,{"x":1},"a.B",null]}""").asJsonObject))
+
+        DocsApi.handle("icons", args)
+        val asked = kestra.requests.filter { it.path.startsWith("/plugins/icons/") }
+        assertEquals(50, asked.size)
+        assertTrue(asked.none { it.path.contains("passwd") })
+    }
+
+    // No JavaScript engine runs in these tests: the page's source is read, as for the rows above.
+    fun testPageOnlyAsksForTheIconsItBuiltAndRetriesMissingOnes() {
+        val js = DocsTest::class.java.getResource("/docs/docs.js")!!.readText()
+        assertTrue(js.substringAfter("function iconImg(cls, key)").substringBefore("function pageHeader").contains("builtIcons.add(key)"))
+        assertTrue(js.substringAfter("function observeIcons()").substringBefore("async function fetchIcons").contains("builtIcons.has("))
+        // A failed icon is not cached as "none" for the life of the view: that would defeat the plugin's retry cooldown.
+        assertFalse(js.contains("icons.set(key, found[key] || null)"))
+        assertTrue(js.substringAfter("async function fetchIcons()").substringBefore("function applyIcon").contains("missed.set(key, Date.now())"))
+    }
+
+    // A server anchor carrying data-nav (DOMPurify keeps data-*) must not navigate the view to its href.
+    fun testAnchorsNeverNavigateTheView() {
+        val js = DocsTest::class.java.getResource("/docs/docs.js")!!.readText()
+        val click = js.substringAfter("document.addEventListener('click'").substringBefore("function setTheme")
+        val anchor = click.indexOf("target.closest('a')")
+        assertTrue(anchor >= 0)
+        assertTrue(click.indexOf("if (anchor) event.preventDefault()") in anchor until click.indexOf("navigate(row.dataset.nav)"))
+    }
+
     fun testTitleComesFromTheFrontmatter() {
         assertEquals("Subflows in Kestra – Modularize", DocsApi.frontmatterTitle("---\ntitle: Subflows in Kestra – Modularize\nh1: x\n---\n# Body"))
         assertEquals("Quoted", DocsApi.frontmatterTitle("---\ntitle: \"Quoted\"\n---\n"))

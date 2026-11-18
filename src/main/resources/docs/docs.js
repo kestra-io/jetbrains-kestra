@@ -138,8 +138,13 @@
 
     const byTitle = (a, b) => (a.title || '').localeCompare(b.title || '');
 
-    // Icons are filled in once visible: the instance serves them one by one.
+    // Icons are filled in once visible: the instance serves them one by one. Only the keys of images built here are
+    // asked for: the server's HTML can carry <img data-icon="anything"> past the sanitizer, and every key asked for
+    // is a request to the instance and a cache entry there.
+    const builtIcons = new Set();
+
     function iconImg(cls, key) {
+        if (key) builtIcons.add(key);
         return key ? `<img class="${cls}" data-icon="${escapeHtml(key)}" alt="">` : `<span class="${cls}"></span>`;
     }
 
@@ -543,6 +548,8 @@
 
     // ---------- Icons ----------
     const icons = new Map();
+    const missed = new Map();
+    const MISSED_RETRY_MS = 60000;
     const wanted = new Set();
     let iconTimer;
     const iconObserver = new IntersectionObserver(observed => {
@@ -550,14 +557,17 @@
             if (!entry.isIntersecting) continue;
             iconObserver.unobserve(entry.target);
             const key = entry.target.dataset.icon;
-            if (icons.has(key)) applyIcon(key);
+            // An icon the instance did not have is asked for again after a while, as the plugin does on its side.
+            if (icons.has(key) || Date.now() - (missed.get(key) || 0) < MISSED_RETRY_MS) applyIcon(key);
             else wanted.add(key);
         }
         if (wanted.size && !iconTimer) iconTimer = setTimeout(fetchIcons, 50);
     });
 
     function observeIcons() {
-        content.querySelectorAll('img[data-icon]').forEach(img => iconObserver.observe(img));
+        content.querySelectorAll('img[data-icon]').forEach(img => {
+            if (builtIcons.has(img.dataset.icon)) iconObserver.observe(img);
+        });
     }
 
     async function fetchIcons() {
@@ -566,7 +576,12 @@
         wanted.clear();
         const found = (await request('icons', {keys})) || {};
         keys.forEach(key => {
-            icons.set(key, found[key] || null);
+            if (found[key]) {
+                icons.set(key, found[key]);
+                missed.delete(key);
+            } else {
+                missed.set(key, Date.now());
+            }
             applyIcon(key);
         });
     }
@@ -636,16 +651,18 @@
     // Every link is handled here: the embedded browser must never navigate away from the page.
     document.addEventListener('click', event => {
         const target = event.target;
+        const anchor = target.closest('a');
+        // Before the row branch: server markdown can put a data-nav on an anchor, DOMPurify keeps data-*, and the
+        // anchor would still navigate the view to its href.
+        if (anchor) event.preventDefault();
         const row = target.closest('[data-nav]');
         if (row && row.dataset.nav) {
             navigate(row.dataset.nav);
             return;
         }
-        const anchor = target.closest('a');
         if (!anchor) return;
         // An anchor inside an <svg> keeps its target in xlink:href, which the view must not follow either.
         const href = anchor.getAttribute('href') || anchor.getAttribute('xlink:href');
-        event.preventDefault();
         if (!href) return;
         if (href.startsWith('#')) {
             const id = decodeURIComponent(href.slice(1));
