@@ -1,12 +1,16 @@
 package io.kestra.jetbrains.vfs
 
 import com.intellij.notification.NotificationAction
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationListener
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.progress.ProcessCanceledException
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.text.StringUtil
 import java.util.concurrent.ConcurrentHashMap
 
@@ -14,11 +18,19 @@ import java.util.concurrent.ConcurrentHashMap
 // Saves of one file are sent in order and only the latest pending content is sent. A failure leaves
 // a notification with the instance's reason and a Retry action, and the file keeps its content: a listing
 // never replaces it with the instance's version until a save went through.
+// Quitting the IDE waits for the queued saves, then asks before dropping the ones the instance refused.
 @Service
-class NamespaceSaver {
+class NamespaceSaver : Disposable {
     private val pending = ConcurrentHashMap<KestraVirtualFile, ByteArray>()
     private val running = ConcurrentHashMap.newKeySet<KestraVirtualFile>()
     private val failed = ConcurrentHashMap.newKeySet<KestraVirtualFile>()
+
+    init {
+        // Registered when the first save creates the service: with no save, there is nothing to lose.
+        ApplicationManager.getApplication().addApplicationListener(object : ApplicationListener {
+            override fun canExitApplication() = confirmExit()
+        }, this)
+    }
 
     fun save(file: KestraVirtualFile, content: ByteArray) {
         pending[file] = content
@@ -27,6 +39,9 @@ class NamespaceSaver {
 
     // True while the content of the file is not on the instance: a save is queued, in flight, or was refused.
     fun hasUnsyncedChanges(file: KestraVirtualFile) = pending.containsKey(file) || file in running || file in failed
+
+    // Files whose last content is not on the instance: queued, in flight, or refused.
+    fun unsyncedFiles(): List<KestraVirtualFile> = (pending.keys + running + failed).filter { it.isValid }.distinct()
 
     // The file is gone, its changes with it.
     fun discard(file: KestraVirtualFile) {
@@ -39,6 +54,29 @@ class NamespaceSaver {
         val deadline = System.currentTimeMillis() + timeoutMillis
         while ((pending.isNotEmpty() || running.isNotEmpty()) && System.currentTimeMillis() < deadline) Thread.sleep(50)
     }
+
+    private fun confirmExit(): Boolean {
+        val app = ApplicationManager.getApplication()
+        if (app.isUnitTestMode || app.isHeadlessEnvironment) return true
+        if (pending.isNotEmpty() || running.isNotEmpty()) {
+            ProgressManager.getInstance().runProcessWithProgressSynchronously(
+                { flush(EXIT_WAIT_MILLIS) }, "Saving to Kestra", false, null,
+            )
+        }
+        val unsynced = unsyncedFiles()
+        if (unsynced.isEmpty()) return true
+        val names = unsynced.take(MAX_LISTED).joinToString("\n") { "  ${it.location}" } +
+            if (unsynced.size > MAX_LISTED) "\n  and ${unsynced.size - MAX_LISTED} more" else ""
+        return Messages.showOkCancelDialog(
+            "These files were not saved to Kestra, and their changes will be lost:\n$names",
+            "Changes Not Saved to Kestra",
+            "Quit Anyway",
+            "Keep Open",
+            Messages.getWarningIcon(),
+        ) == Messages.OK
+    }
+
+    override fun dispose() = Unit
 
     private fun drain(file: KestraVirtualFile) {
         try {
@@ -82,6 +120,8 @@ class NamespaceSaver {
 
     companion object {
         const val GROUP = "Kestra Namespace Files"
+        const val EXIT_WAIT_MILLIS = 15_000L
+        private const val MAX_LISTED = 10
 
         val instance: NamespaceSaver get() = service()
     }

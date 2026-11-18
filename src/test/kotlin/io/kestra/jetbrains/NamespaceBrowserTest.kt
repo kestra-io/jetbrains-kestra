@@ -136,6 +136,8 @@ class NamespaceBrowserTest : KestraTestCase() {
 
         // The refused edit is not replaced by the instance's version when the folder is listed again.
         assertTrue(NamespaceSaver.instance.hasUnsyncedChanges(locked))
+        // Quitting the IDE asks before dropping it.
+        assertEquals(listOf(locked), NamespaceSaver.instance.unsyncedFiles())
         KestraFileSystem.instance.list(KestraFileSystem.instance.root(instance, "company.team"))
         assertEquals("y", String(locked.contentsToByteArray()))
     }
