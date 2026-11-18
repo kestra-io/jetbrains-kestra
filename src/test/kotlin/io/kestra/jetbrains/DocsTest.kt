@@ -5,6 +5,7 @@ import com.google.gson.JsonParser
 import io.kestra.jetbrains.docs.DocsApi
 import io.kestra.jetbrains.docs.KestraDocsView
 import io.kestra.jetbrains.flow.FlowYaml
+import io.kestra.jetbrains.jcef.JcefView
 import io.kestra.jetbrains.topology.PluginIcons
 
 class DocsTest : KestraTestCase() {
@@ -139,6 +140,19 @@ class DocsTest : KestraTestCase() {
         val root = DocsApi.handle("subgroups", JsonObject()).asJsonArray[0].asJsonObject
         assertTrue(root.get("subGroup").isJsonNull)
         assertEquals("io.kestra.plugin.scripts.dotnet.Script", root.getAsJsonArray("tasks")[0].asJsonObject.get("cls").asString)
+    }
+
+    // What both embedded views share: a field of the wrong shape is a missing one, not an exception on the EDT.
+    fun testSharedBridgeParsingIsDefensive() {
+        val json = JcefView.parseObject("""{"type":{"nested":true},"taskId":["a"],"op":"x","n":3}""")!!
+        assertNull(with(JcefView) { json.text("type") })
+        assertNull(with(JcefView) { json.text("taskId") })
+        assertNull(with(JcefView) { json.text("missing") })
+        assertEquals("x", with(JcefView) { json.text("op") })
+        assertEquals("3", with(JcefView) { json.text("n") })
+        assertNull(JcefView.parseObject("[1]"))
+        assertNull(JcefView.parseObject("not json"))
+        assertEquals("#0102ff", JcefView.hex(java.awt.Color(1, 2, 255)))
     }
 
     fun testPageBundlesItsLibraries() {

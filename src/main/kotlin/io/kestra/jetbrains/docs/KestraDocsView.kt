@@ -1,83 +1,36 @@
 package io.kestra.jetbrains.docs
 
 import com.google.gson.JsonObject
-import com.google.gson.JsonParser
 import com.google.gson.JsonPrimitive
 import com.intellij.ide.BrowserUtil
-import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.DefaultLanguageHighlighterColors
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.ide.CopyPasteManager
-import com.intellij.openapi.util.Disposer
 import com.intellij.ui.ColorUtil
 import com.intellij.ui.JBColor
-import com.intellij.ui.jcef.JBCefBrowser
-import com.intellij.ui.jcef.JBCefBrowserBase
-import com.intellij.ui.jcef.JBCefJSQuery
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
+import io.kestra.jetbrains.jcef.JcefView
 import io.kestra.jetbrains.run.StateBucket
-import org.cef.browser.CefBrowser
-import org.cef.browser.CefFrame
-import org.cef.handler.CefLoadHandlerAdapter
-import org.cef.handler.CefRequestHandlerAdapter
-import org.cef.network.CefRequest
 import java.awt.Color
 import java.awt.datatransfer.StringSelection
-import javax.swing.JComponent
 
 // The documentation page in the embedded browser. The page asks for data through a query, answered in the
 // background by DocsApi; links leave for the system browser, the page itself never navigates.
-class KestraDocsView : Disposable {
-    private val browser = JBCefBrowser()
-    private val query = JBCefJSQuery.create(browser as JBCefBrowserBase)
-    private val queue = ArrayList<String>()
-    private var ready = false
-
-    // Once the page has loaded, nothing may navigate the view: a link the sanitizer let through, a form, a script.
-    // Links are opened by the page itself through the system browser. Until that first load is over every
-    // navigation is allowed, not only one: the embedded browser may take several requests to load the page, and
-    // cancelling one of them leaves a blank view.
-    @Volatile private var pageLoaded = false
-
-    val component: JComponent get() = browser.component
-
+class KestraDocsView : JcefView() {
     init {
-        Disposer.register(this, browser)
-        Disposer.register(this, query)
-        query.addHandler { message ->
-            handle(message)
-            null
-        }
-        // Registered before the page loads: until it has, navigations go through; afterwards every one is cancelled.
-        browser.jbCefClient.addRequestHandler(object : CefRequestHandlerAdapter() {
-            override fun onBeforeBrowse(cefBrowser: CefBrowser?, frame: CefFrame?, request: CefRequest?, userGesture: Boolean, isRedirect: Boolean) = pageLoaded
-
-            override fun onOpenURLFromTab(cefBrowser: CefBrowser?, frame: CefFrame?, targetUrl: String?, userGesture: Boolean) = true
-        }, browser.cefBrowser)
-        browser.jbCefClient.addLoadHandler(object : CefLoadHandlerAdapter() {
-            override fun onLoadingStateChange(cefBrowser: CefBrowser?, isLoading: Boolean, canGoBack: Boolean, canGoForward: Boolean) {
-                if (!isLoading) pageLoaded = true
-            }
-        }, browser.cefBrowser)
-        browser.loadHTML(page("window.kestraPost = function (msg) { ${query.inject("msg")} };"))
+        load()
     }
 
-    private fun handle(message: String) {
-        val (op, id, args) = parse(message) ?: return
+    override fun page(bridge: String) = Companion.page(bridge)
+
+    override fun onMessage(json: JsonObject) {
+        val (op, id, args) = message(json) ?: return
         when (op) {
-            "ready" -> ApplicationManager.getApplication().invokeLater {
-                ready = true
-                execute("kestraDocs.setTheme(${theme()})")
-                execute("kestraDocs.home()")
-                queue.forEach(::execute)
-                queue.clear()
-            }
+            "ready" -> pageReady("kestraDocs.setTheme(${theme()})", "kestraDocs.home()")
             "open" -> args.text("url")?.takeIf { it.startsWith("https://") || it.startsWith("http://") }?.let(BrowserUtil::browse)
-            "copy" -> ApplicationManager.getApplication().invokeLater {
-                CopyPasteManager.getInstance().setContents(StringSelection(args.text("text").orEmpty()))
-            }
+            "copy" -> CopyPasteManager.getInstance().setContents(StringSelection(args.text("text").orEmpty()))
             else -> if (id != null) ApplicationManager.getApplication().executeOnPooledThread {
                 val result = DocsApi.handle(op, args)
                 execute("kestraDocs.resolve($id, $result)")
@@ -90,46 +43,30 @@ class KestraDocsView : Disposable {
 
     fun updateTheme() = call("kestraDocs.setTheme(${theme()})")
 
-    private fun call(script: String) {
-        if (ready) execute(script) else queue += script
-    }
-
-    private fun execute(script: String) = browser.cefBrowser.executeJavaScript(script, browser.cefBrowser.url, 0)
-
-    override fun dispose() = Unit
-
-    // What the page sends: {"op": "...", "id": 1, "args": {...}}. Anything else in it is the page's own problem, it
-    // must not throw on the browser's thread: a malformed field is as good as a missing one.
+    // What the page sends: {"op": "...", "id": 1, "args": {...}}. A malformed field is as good as a missing one.
     internal data class Message(val op: String, val id: Int?, val args: JsonObject)
 
     companion object {
-        internal fun parse(message: String): Message? {
-            val json = runCatching { JsonParser.parseString(message) }.getOrNull()?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+        internal fun parse(message: String): Message? = parseObject(message)?.let(::message)
+
+        private fun message(json: JsonObject): Message? {
             val op = json.text("op") ?: return null
             val id = json.get("id")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.let { runCatching { it.asInt }.getOrNull() }
             val args = json.get("args")?.takeIf { it.isJsonObject }?.asJsonObject ?: JsonObject()
             return Message(op, id, args)
         }
 
-        private fun JsonObject.text(name: String) = get(name)?.takeIf { it.isJsonPrimitive }?.asString
-
-        fun page(bridge: String): String {
-            fun resource(name: String) = KestraDocsView::class.java.getResource("/docs/$name")!!.readText()
-            return resource("docs.html")
-                .replace("/*STYLE*/", resource("docs.css"))
-                .replace("/*BRIDGE*/", bridge)
-                .replace("/*MARKDOWN_IT*/", resource("markdown-it.min.js"))
-                .replace("/*CONTAINER*/", resource("markdown-it-container.min.js"))
-                .replace("/*PURIFY*/", resource("purify.min.js"))
-                .replace("/*DOCS*/", resource("docs.js"))
-        }
+        fun page(bridge: String): String = assemble(
+            "docs", "docs.html", bridge,
+            mapOf("STYLE" to "docs.css", "MARKDOWN_IT" to "markdown-it.min.js", "CONTAINER" to "markdown-it-container.min.js", "PURIFY" to "purify.min.js", "DOCS" to "docs.js"),
+        )
 
         // The design tokens of the VS Code panel, taken from the IDE theme.
         fun theme(): JsonObject = JsonObject().apply {
             val scheme = EditorColorsManager.getInstance().globalScheme
             val base = UIUtil.getPanelBackground()
             val foreground = UIUtil.getLabelForeground()
-            fun color(name: String, value: Color) = addProperty(name, "#%02x%02x%02x".format(value.red, value.green, value.blue))
+            fun color(name: String, value: Color) = addProperty(name, hex(value))
             fun syntax(name: String, key: com.intellij.openapi.editor.colors.TextAttributesKey, fallback: Color) =
                 color(name, scheme.getAttributes(key)?.foregroundColor ?: fallback)
             color("ks-bg-base", base)

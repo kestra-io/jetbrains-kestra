@@ -7,20 +7,14 @@ import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.openapi.wm.ex.ToolWindowManagerListener
-import com.intellij.ui.components.JBLabel
 import com.intellij.ui.content.ContentFactory
-import com.intellij.ui.jcef.JBCefApp
-import javax.swing.SwingConstants
+import io.kestra.jetbrains.jcef.JcefView
 
 class KestraTopologyToolWindowFactory : ToolWindowFactory, DumbAware {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         val service = KestraTopologyService.getInstance(project)
         // JCEF ships with the JetBrains Runtime, but a custom runtime or a remote client can lack it.
-        if (!JBCefApp.isSupported()) {
-            val label = JBLabel("The topology preview needs the embedded browser (JCEF), which this IDE runtime does not provide.", SwingConstants.CENTER)
-            toolWindow.contentManager.addContent(ContentFactory.getInstance().createContent(label, "", false))
-            return
-        }
+        if (JcefView.showUnavailable(toolWindow, "The topology preview")) return
         val view = JcefTopologyView(service::reveal)
         val content = ContentFactory.getInstance().createContent(view.component, "", false)
         Disposer.register(content, view)

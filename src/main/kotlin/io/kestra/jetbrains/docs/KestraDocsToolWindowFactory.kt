@@ -11,23 +11,17 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.psi.PsiDocumentManager
-import com.intellij.ui.components.JBLabel
 import com.intellij.ui.content.ContentFactory
-import com.intellij.ui.jcef.JBCefApp
 import com.intellij.util.Alarm
 import io.kestra.jetbrains.flow.FlowYaml
+import io.kestra.jetbrains.jcef.JcefView
 import org.jetbrains.yaml.psi.YAMLFile
-import javax.swing.SwingConstants
 
 // The Kestra Documentation tool window. While it is shown, placing the cursor on a task in a YAML file
 // shows that plugin's documentation.
 class KestraDocsToolWindowFactory : ToolWindowFactory, DumbAware {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        if (!JBCefApp.isSupported()) {
-            val label = JBLabel("The documentation needs the embedded browser (JCEF), which this IDE runtime does not provide.", SwingConstants.CENTER)
-            toolWindow.contentManager.addContent(ContentFactory.getInstance().createContent(label, "", false))
-            return
-        }
+        if (JcefView.showUnavailable(toolWindow, "The documentation")) return
         val view = KestraDocsView()
         val content = ContentFactory.getInstance().createContent(view.component, "", false)
         Disposer.register(content, view)
