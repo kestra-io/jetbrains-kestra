@@ -13,6 +13,9 @@ import javax.swing.JComponent
 // What the topology service draws on. The JCEF view in the IDE, a recorder in tests.
 interface TopologyRenderer {
     fun render(elements: String)
+
+    // The same graph with more icons, drawn without a new layout.
+    fun updateIcons(elements: String)
     fun notice(text: String)
     fun setTaskState(taskId: String, bucket: String?)
     fun resetStates()
@@ -59,6 +62,8 @@ class JcefTopologyView(private val onReveal: (String) -> Unit) : TopologyRendere
     private fun execute(script: String) = browser.cefBrowser.executeJavaScript(script, browser.cefBrowser.url, 0)
 
     override fun render(elements: String) = call("kestraTopology.render($elements)")
+
+    override fun updateIcons(elements: String) = call("kestraTopology.updateIcons($elements)")
 
     override fun notice(text: String) = call("kestraTopology.notice(${JsonPrimitive(text)})")
 

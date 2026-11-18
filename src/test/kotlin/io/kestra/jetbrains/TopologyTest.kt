@@ -16,11 +16,18 @@ class TopologyTest : KestraTestCase() {
 
     private class Recorder : TopologyRenderer {
         val calls = ArrayList<String>()
-        var elements: String? = null
+        // Every drawing, in order: the test thread dispatches events, so a later one can land before an assert.
+        val renders = ArrayList<String>()
+        val iconUpdates = ArrayList<String>()
 
         override fun render(elements: String) {
-            this.elements = elements
+            renders += elements
             calls += "render"
+        }
+
+        override fun updateIcons(elements: String) {
+            iconUpdates += elements
+            calls += "icons"
         }
 
         override fun notice(text: String) {
@@ -67,11 +74,11 @@ class TopologyTest : KestraTestCase() {
         myFixture.configureByText("flow.yml", FLOW)
         val (service, recorder) = attached()
 
-        // Drawn at once without the icons not fetched yet, then again with them.
-        assertFalse(recorder.elements!!.contains("data:image/svg+xml;base64,PHN2Zy8+"))
+        // Drawn at once without the icons not fetched yet, then the icons follow without a new layout.
+        assertFalse(recorder.renders.first().contains("data:image/svg+xml;base64,PHN2Zy8+"))
         waitFor { recorder.calls.size >= 2 }
-        val elements = recorder.elements!!
-        assertTrue(elements, elements.contains("data:image/svg+xml;base64,PHN2Zy8+"))
+        assertEquals(listOf("render", "icons"), recorder.calls)
+        assertTrue(recorder.iconUpdates.single(), recorder.iconUpdates.single().contains("data:image/svg+xml;base64,PHN2Zy8+"))
         assertEquals(FLOW, kestra.requests.single { it.path == "/flows/graph" }.body)
 
         // A refresh without an edit is free.
@@ -82,11 +89,88 @@ class TopologyTest : KestraTestCase() {
         service.taskState("company.team.hello", "greet", "FAILED")
         service.taskState("company.team.other", "greet", "SUCCESS")
         waitFor { recorder.calls.size >= 4 }
-        assertEquals(listOf("render", "render", "reset", "state greet failed"), recorder.calls)
+        assertEquals(listOf("render", "icons", "reset", "state greet failed"), recorder.calls)
 
         service.reveal("greet")
         val line = myFixture.editor.document.getLineNumber(myFixture.editor.caretModel.offset)
         assertEquals("  - id: greet", myFixture.editor.document.text.lines()[line])
+    }
+
+    // The graph of a flow still waiting for its icons must not be drawn over what the editor shows now.
+    fun testIconsOfAFlowAreNotDrawnOverTheNoticeOfTheNextFile() {
+        val iconRequested = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        kestra.json("POST", "/flows/graph") { graph }
+        kestra.handle("GET", "/plugins/icons/io.kestra.plugin.core.log.Log") { exchange, _ ->
+            iconRequested.countDown()
+            release.await(30, java.util.concurrent.TimeUnit.SECONDS)
+            FakeKestra.respond(exchange, 200, """{"icon":{"name":"Log","icon":"PHN2Zy8+"}}""")
+        }
+        kestra.json("GET", "/plugins/icons/io.kestra.plugin.core.trigger.Schedule") { """{"icon":{"icon":"PHN2Zy8+"}}""" }
+        try {
+            myFixture.configureByText("flow.yml", FLOW)
+            val (service, recorder) = attached()
+            assertTrue(iconRequested.await(30, java.util.concurrent.TimeUnit.SECONDS))
+            val flowRefresh = service.lastRefresh
+
+            // The editor moves to a file that is not a flow while the icons are still being fetched.
+            myFixture.configureByText("README.md", "# Not a flow")
+            // (The tab change schedules a refresh of its own, so the notice may be shown more than once.)
+            service.refresh().also { waitUntilDone(it) }
+            val notice = "notice Open a flow to preview its topology."
+            assertEquals(notice, recorder.calls.last())
+            assertEquals(listOf("render"), recorder.calls.filter { !it.startsWith("notice") })
+
+            release.countDown()
+            // The refresh of the flow completes after its icon step, which was dropped as stale.
+            waitUntilDone(flowRefresh)
+            assertEquals(notice, recorder.calls.last())
+            assertEquals(listOf("render"), recorder.calls.filter { !it.startsWith("notice") })
+        } finally {
+            release.countDown()
+        }
+    }
+
+    fun testFailedIconsAreNotFetchedAgainRightAway() {
+        kestra.json("GET", "/plugins/icons/io.kestra.plugin.core.log.Log", status = 503) { "{}" }
+        val icons = PluginIcons.instance
+        val types = listOf("io.kestra.plugin.core.log.Log")
+        assertTrue(icons.hasMissing(types))
+        assertTrue(icons.icons(types).isEmpty())
+        assertEquals(1, kestra.requests.count { it.path == "/plugins/icons/io.kestra.plugin.core.log.Log" })
+
+        // A debounced refresh a moment later does not ask again, and does not even start an icon stage.
+        assertFalse(icons.hasMissing(types))
+        assertTrue(icons.icons(types).isEmpty())
+        assertEquals(1, kestra.requests.count { it.path == "/plugins/icons/io.kestra.plugin.core.log.Log" })
+    }
+
+    fun testConcurrentRefreshesShareOneIconRequest() {
+        val release = java.util.concurrent.CountDownLatch(1)
+        val requested = java.util.concurrent.CountDownLatch(1)
+        kestra.handle("GET", "/plugins/icons/io.kestra.plugin.core.log.Log") { exchange, _ ->
+            requested.countDown()
+            release.await(30, java.util.concurrent.TimeUnit.SECONDS)
+            FakeKestra.respond(exchange, 200, """{"icon":{"icon":"QQ=="}}""")
+        }
+        val types = listOf("io.kestra.plugin.core.log.Log")
+        val results = java.util.concurrent.CopyOnWriteArrayList<Map<String, String>>()
+        val first = Thread { results += PluginIcons.instance.icons(types) }.also { it.start() }
+        try {
+            assertTrue(requested.await(30, java.util.concurrent.TimeUnit.SECONDS))
+            val second = Thread { results += PluginIcons.instance.icons(types) }.also { it.start() }
+            // Parked on the fetch under way: it is shared, not repeated.
+            val deadline = System.currentTimeMillis() + 10_000
+            while (second.state != Thread.State.WAITING && System.currentTimeMillis() < deadline) Thread.onSpinWait()
+            release.countDown()
+            first.join(30_000)
+            second.join(30_000)
+        } finally {
+            release.countDown()
+        }
+        assertEquals(2, results.size)
+        assertTrue(results.all { it["io.kestra.plugin.core.log.Log"] == "data:image/svg+xml;base64,QQ==" })
+        assertEquals(1, kestra.requests.count { it.path == "/plugins/icons/io.kestra.plugin.core.log.Log" })
     }
 
     fun testKestra1UsesTheIconIndex() {
@@ -117,6 +201,16 @@ class TopologyTest : KestraTestCase() {
         assertTrue(html.contains("window.kestraTopology"))
         assertFalse(html.contains("/*TOPOLOGY*/"))
         assertTrue(TopologyPage.theme().get("failed").asString.matches(Regex("#[0-9a-f]{6}")))
+    }
+
+    private fun waitUntilDone(future: java.util.concurrent.CompletableFuture<Unit>) {
+        val deadline = System.currentTimeMillis() + 30_000
+        while (!future.isDone && System.currentTimeMillis() < deadline) {
+            PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+            Thread.sleep(5)
+        }
+        assertTrue("refresh did not finish", future.isDone)
+        future.getNow(Unit)
     }
 
     private fun attached(): Pair<KestraTopologyService, Recorder> {

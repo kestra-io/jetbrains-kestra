@@ -28,6 +28,7 @@ import io.kestra.jetbrains.settings.KestraInstanceListener
 import io.kestra.jetbrains.settings.KestraSettings
 import org.jetbrains.yaml.psi.YAMLKeyValue
 import org.jetbrains.yaml.psi.YAMLMapping
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicInteger
 
 // Keeps the topology tool window in sync with the flow in the editor, and colors it during a run.
@@ -82,45 +83,72 @@ class KestraTopologyService(private val project: Project) : Disposable {
 
     fun scheduleRefresh(delay: Int = REFRESH_DEBOUNCE_MS) {
         alarm.cancelAllRequests()
-        alarm.addRequest(::refresh, delay)
+        alarm.addRequest({ refresh() }, delay)
     }
 
-    fun refresh() {
-        val renderer = renderer ?: return
+    // Completes once the graph, and its icons when some were missing, reached the renderer or were dropped as stale.
+    fun refresh(): CompletableFuture<Unit> {
+        val done = CompletableFuture.completedFuture(Unit)
+        val renderer = renderer ?: return done
         if (!visible) {
             pending = true
-            return
+            return done
         }
         pending = false
-        val editor = selectedEditor() ?: return notice("Open a flow to preview its topology.")
+        val editor = selectedEditor() ?: return done.also { notice("Open a flow to preview its topology.") }
         val (url, flowUid) = ApplicationManager.getApplication().runReadAction<Pair<String, String>?> {
             val file = PsiDocumentManager.getInstance(project).getPsiFile(editor.document) ?: return@runReadAction null
             val flow = FlowYaml.flow(file) ?: return@runReadAction null
             (file.virtualFile?.url ?: return@runReadAction null) to flow.uid
-        } ?: return notice("Open a flow to preview its topology.")
+        } ?: return done.also { notice("Open a flow to preview its topology.") }
         // Switching tabs re-triggers a refresh without a text change.
         val key = "$url:${editor.document.modificationStamp}"
-        if (key == lastKey && lastGraph != null) return
+        if (key == lastKey && lastGraph != null) return done
 
         val source = editor.document.text
         val current = seq.incrementAndGet()
+        val graphShown = CompletableFuture<Unit>()
+        val iconsShown = CompletableFuture<Unit>()
         ApplicationManager.getApplication().executeOnPooledThread {
-            val result = load(source)
-            ApplicationManager.getApplication().invokeLater({
-                if (current != seq.get() || this.renderer !== renderer) return@invokeLater
-                when (result) {
-                    is Load.Graph -> show(key, url, flowUid, result.elements)
-                    // Keep the last good graph of this file through invalid intermediate edits.
-                    is Load.Failed -> if (lastFile != url || lastGraph == null || result.always) notice(result.message)
+            try {
+                val result = load(source)
+                ApplicationManager.getApplication().invokeLater({
+                    try {
+                        if (current != seq.get() || this.renderer !== renderer) return@invokeLater
+                        when (result) {
+                            is Load.Graph -> show(key, url, flowUid, result.elements)
+                            // Keep the last good graph of this file through invalid intermediate edits.
+                            is Load.Failed -> if (lastFile != url || lastGraph == null || result.always) notice(result.message)
+                        }
+                    } finally {
+                        graphShown.complete(Unit)
+                    }
+                }, project.disposed)
+                // The graph is drawn with the icons already known; the others follow once fetched.
+                val withIcons = (result as? Load.Graph)?.withIcons?.invoke()
+                if (withIcons == null) {
+                    iconsShown.complete(Unit)
+                    return@executeOnPooledThread
                 }
-            }, project.disposed)
-            // The graph is drawn with the icons already known; the others follow once fetched.
-            val withIcons = (result as? Load.Graph)?.withIcons?.invoke() ?: return@executeOnPooledThread
-            ApplicationManager.getApplication().invokeLater({
-                if (current == seq.get() && this.renderer === renderer) show(key, url, flowUid, withIcons)
-            }, project.disposed)
+                ApplicationManager.getApplication().invokeLater({
+                    try {
+                        if (current == seq.get() && this.renderer === renderer) showIcons(withIcons)
+                    } finally {
+                        iconsShown.complete(Unit)
+                    }
+                }, project.disposed)
+            } catch (e: Throwable) {
+                graphShown.completeExceptionally(e)
+                iconsShown.completeExceptionally(e)
+                throw e
+            }
         }
+        return graphShown.thenCombine(iconsShown) { _, _ -> }.also { lastRefresh = it }
     }
+
+    // The latest refresh that loaded a graph. For tests, which wait on it instead of on the clock.
+    @Volatile internal var lastRefresh: CompletableFuture<Unit> = CompletableFuture.completedFuture(Unit)
+        private set
 
     private sealed interface Load {
         // withIcons fetches the missing icons (network) and returns the graph again, null when none is missing.
@@ -160,7 +188,15 @@ class KestraTopologyService(private val project: Project) : Disposable {
         shownFlow = flowUid
     }
 
+    // Same graph, more icons: the nodes keep their place and the user's pan and zoom, nothing is laid out again.
+    private fun showIcons(elements: String) {
+        lastGraph = elements
+        renderer?.updateIcons(elements)
+    }
+
     private fun notice(text: String) {
+        // A graph still being loaded or waiting for its icons must not be drawn over the notice.
+        seq.incrementAndGet()
         lastKey = null
         lastGraph = null
         shownFlow = null

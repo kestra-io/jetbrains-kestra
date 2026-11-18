@@ -138,6 +138,18 @@
         cy.on('mouseout', 'node.task', event => event.target.connectedEdges().removeClass('hl'));
     }
 
+    // Only the icons change: no layout, so the user's pan and zoom stay.
+    function updateIcons(elements) {
+        if (!cy) return;
+        cy.batch(() => {
+            for (const element of elements) {
+                if (!element.data || element.data.icon === undefined) continue;
+                const node = cy.getElementById(element.data.id);
+                if (node.nonempty()) node.data('icon', element.data.icon);
+            }
+        });
+    }
+
     function setTaskState(taskId, bucket) {
         if (!cy) return;
         cy.nodes('.task').forEach(node => {
@@ -175,6 +187,7 @@
 
     window.kestraTopology = {
         render,
+        updateIcons,
         notice: showMessage,
         setTaskState,
         resetStates: () => cy && cy.nodes('.task').removeClass(RUN_CLASSES),
