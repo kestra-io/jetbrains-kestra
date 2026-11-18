@@ -77,7 +77,7 @@ class KestraRunConfiguration(project: Project, factory: ConfigurationFactory, na
 
     private class Editor(project: Project) : SettingsEditor<KestraRunConfiguration>() {
         private val file = TextFieldWithBrowseButton().apply {
-            addBrowseFolderListener(project, FileChooserDescriptorFactory.singleFile().withTitle("Select Flow File"))
+            addBrowseFolderListener(project, FileChooserDescriptorFactory.createSingleFileDescriptor().withTitle("Select Flow File"))
         }
 
         override fun resetEditorFrom(configuration: KestraRunConfiguration) {

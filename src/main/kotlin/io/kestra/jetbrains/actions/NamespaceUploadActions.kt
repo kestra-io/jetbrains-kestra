@@ -31,7 +31,7 @@ class SyncFolderToNamespaceAction : DumbAwareAction() {
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
         val folders = e.localSelection().filter { it.isDirectory }.ifEmpty {
-            listOfNotNull(FileChooser.chooseFile(FileChooserDescriptorFactory.singleDir().withTitle("Folder to Sync"), project, null))
+            listOfNotNull(FileChooser.chooseFile(FileChooserDescriptorFactory.createSingleFolderDescriptor().withTitle("Folder to Sync"), project, null))
         }
         if (folders.isNotEmpty()) NamespaceUpload.upload(project, folders, "Sync Folder to Kestra Namespace")
     }

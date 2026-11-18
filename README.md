@@ -32,7 +32,7 @@ Author and run Kestra flows in IntelliJ IDEA, PyCharm, WebStorm and the other Je
 
 ## Requirements
 
-- A JetBrains IDE 2025.3 or later: IntelliJ IDEA, PyCharm, WebStorm, GoLand, and the other IDEs built on the IntelliJ Platform.
+- A JetBrains IDE 2024.3 or later: IntelliJ IDEA, PyCharm, WebStorm, GoLand, and the other IDEs built on the IntelliJ Platform.
 - A Kestra instance, 1.x or 2.x. `{{ }}` completion from the instance needs 2.0 or later.
 
 ## Installation

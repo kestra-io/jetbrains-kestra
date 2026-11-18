@@ -1,6 +1,7 @@
 import org.jetbrains.changelog.Changelog
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
 import org.jetbrains.kotlin.gradle.dsl.KotlinVersion
 
 plugins {
@@ -17,8 +18,11 @@ changelog {
 kotlin {
     jvmToolchain(21)
     compilerOptions {
-        // Stay within the Kotlin stdlib bundled by the lowest supported IDE (2025.3 ships 2.2).
-        apiVersion = KotlinVersion.KOTLIN_2_2
+        // Stay within the Kotlin stdlib bundled by the lowest supported IDE (2024.3.6 ships 2.0.21).
+        apiVersion = KotlinVersion.KOTLIN_2_0
+        // No bridges to the platform interfaces' default methods: 2024.3 marks some of them internal (ToolWindowFactory.manage,
+        // getAnchor, getIcon), and the Plugin Verifier fails on the bridges even though the plugin never calls them.
+        jvmDefault = JvmDefaultMode.NO_COMPATIBILITY
     }
 }
 
@@ -70,7 +74,7 @@ intellijPlatform {
     // -PverifyIdes=GO checks another IDE. Local only: CI downloads no IDE but the one `test` builds against.
     pluginVerification {
         ides {
-            // 2025.3, not 2025.3.6: each IDE numbers its bugfix releases differently (there is no GoLand 2025.3.6),
+            // 2024.3, not 2024.3.6: each IDE numbers its bugfix releases differently (IntelliJ IDEA has a 2024.3.7.1, PyCharm stops at 2024.3.6.1),
             // and the first release of the line is the lowest one sinceBuild accepts.
             val lowest = providers.gradleProperty("platformVersion").map { it.split('.').take(2).joinToString(".") }
             providers.gradleProperty("verifyIdes").get().split(',').map(String::trim).filter(String::isNotEmpty).forEach { code ->
@@ -86,7 +90,8 @@ intellijPlatform {
 // misses what only fails once the plugin loads, such as 2026.x moving JCEF to a bundled plugin.
 val testIdes = mapOf(
     "testIdeaLatest" to (IntelliJPlatformType.IntellijIdea to "latestPlatformVersion"),
-    "testPyCharm" to (IntelliJPlatformType.PyCharm to "platformVersion"),
+    // PyCharm Professional: the unified PyCharm starts at 2025.1.
+    "testPyCharm" to (IntelliJPlatformType.PyCharmProfessional to "platformVersion"),
     "testPyCharmLatest" to (IntelliJPlatformType.PyCharm to "latestPlatformVersion"),
 )
 

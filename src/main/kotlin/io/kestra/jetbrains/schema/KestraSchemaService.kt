@@ -49,7 +49,7 @@ class KestraSchemaService {
             for (project in ProjectManager.getInstance().openProjects) {
                 if (!project.isDisposed) {
                     JsonSchemaService.Impl.get(project).reset()
-                    DaemonCodeAnalyzer.getInstance(project).restart("Kestra flow schema downloaded")
+                    DaemonCodeAnalyzer.getInstance(project).restart()
                 }
             }
         }

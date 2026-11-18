@@ -20,8 +20,9 @@
     <depends>org.jetbrains.plugins.yaml</depends>
     <depends>com.intellij.modules.json</depends>
     <!-- The topology and documentation views. JCEF is part of the platform up to 2025.3 and a bundled plugin from 2026.x.
-         Optional, because 2025.3 builds before 2025.3.6 do not declare this module and would refuse a required one;
-         when present, an optional dependency still adds its classes to the plugin class loader. -->
+         Optional, because builds before 2025.3.6 (2024.3 included) do not declare this module and would refuse a required
+         one; their platform class loader already has the JCEF classes. When present, an optional dependency still adds its
+         classes to the plugin class loader. -->
     <depends optional="true" config-file="kestra-jcef.xml">com.intellij.modules.jcef</depends>
 
     <extensions defaultExtensionNs="com.intellij">

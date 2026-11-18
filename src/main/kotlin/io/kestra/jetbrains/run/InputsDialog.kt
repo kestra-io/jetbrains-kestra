@@ -40,7 +40,7 @@ class InputsDialog(private val project: Project, flowUid: String, private val in
 
     private fun fieldFor(input: FlowInput): Field = when {
         input.type == "FILE" -> TextFieldWithBrowseButton().apply {
-            addBrowseFolderListener(project, FileChooserDescriptorFactory.singleFile().withTitle("Select File for ${input.id}"))
+            addBrowseFolderListener(project, FileChooserDescriptorFactory.createSingleFileDescriptor().withTitle("Select File for ${input.id}"))
         }.let { field -> Field(field) { field.text } }
         input.type == "SECRET" -> JBPasswordField().apply { text = input.defaultValue }.let { field -> Field(field) { String(field.password) } }
         // As in the VS Code extension: BOOL is a plain checkbox, always sent, only BOOLEAN can be left to the flow.
