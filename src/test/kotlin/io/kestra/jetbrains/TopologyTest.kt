@@ -194,9 +194,28 @@ class TopologyTest : KestraTestCase() {
         val icons = PluginIcons.instance
         assertTrue(icons.icons(listOf("a.A")).isEmpty())
 
-        // Another type, so the cooldown of the first one does not hide the result.
+        // Once the index cooldown is over. Another type, so the cooldown of the first one does not hide the result.
         healthy.set(true)
-        assertEquals(mapOf("b.B" to "data:image/svg+xml;base64,Qg=="), icons.icons(listOf("b.B")))
+        val now = System.nanoTime()
+        icons.clock = { now + java.util.concurrent.TimeUnit.MINUTES.toNanos(2) }
+        try {
+            assertEquals(mapOf("b.B" to "data:image/svg+xml;base64,Qg=="), icons.icons(listOf("b.B")))
+        } finally {
+            icons.clock = System::nanoTime
+        }
+    }
+
+    // On 1.x every type comes from the same index: types that miss it must not build it again one after another.
+    fun testKestra1IconIndexFailureIsNotRetriedForEachType() {
+        kestra.json("GET", "/configs") { """{"version":"1.3.47"}""" }
+        KestraSettings.fireChanged()
+        kestra.handle("GET", "/plugins/icons") { exchange, _ -> FakeKestra.respond(exchange, 503, "{}") }
+
+        assertTrue(PluginIcons.instance.icons((1..6).map { "a.T$it" }).isEmpty())
+        assertEquals(1, kestra.requests.count { it.path == "/plugins/icons" })
+        // Within the cooldown, a type never asked for does not build it either.
+        assertTrue(PluginIcons.instance.icons(listOf("b.B")).isEmpty())
+        assertEquals(1, kestra.requests.count { it.path == "/plugins/icons" })
     }
 
     // A fetch of the old instance that ends after the settings changed must not leave its index behind.

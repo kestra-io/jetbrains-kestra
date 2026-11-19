@@ -27,6 +27,11 @@ class PluginIcons : Disposable {
     private val inFlight = ConcurrentHashMap<String, CompletableFuture<Void>>()
     private val pool = AppExecutorUtil.createBoundedApplicationPoolExecutor("Kestra plugin icons", PARALLELISM)
     @Volatile private var index: JsonObject? = null
+    // When the last build of the 1.x index failed. One cooldown for the index, not one per type: every type
+    // waiting for it would otherwise build it again in turn, two requests of up to 60s each.
+    @Volatile private var indexFailedAt: Long? = null
+    // The time the cooldowns are measured in; tests move it forward.
+    @Volatile internal var clock: () -> Long = System::nanoTime
     // Bumped when the instance changes, so a fetch started for the old one does not fill the cache of the new one.
     @Volatile private var generation = 0
 
@@ -59,14 +64,16 @@ class PluginIcons : Disposable {
 
     private fun wanted(type: String) = !cache.containsKey(type) && !recentlyFailed(type)
 
-    private fun recentlyFailed(type: String) = failures[type]?.let { System.nanoTime() - it < FAILURE_COOLDOWN_NANOS } == true
+    private fun recentlyFailed(type: String) = failures[type].coolingDown()
+
+    private fun Long?.coolingDown() = this != null && clock() - this < FAILURE_COOLDOWN_NANOS
 
     private fun load(type: String) {
         val started = generation
         val base64 = try {
             fetch(type)
         } catch (_: Exception) {
-            if (started == generation) failures[type] = System.nanoTime()
+            if (started == generation) failures[type] = clock()
             return
         }
         if (started != generation) return
@@ -87,12 +94,20 @@ class PluginIcons : Disposable {
         // Plugin types and plugin groups have separate indexes on 1.x.
         val started = generation
         val all = index ?: synchronized(this) {
-            index ?: JsonObject().also { merged ->
-                listOf(api.pluginIcons(), api.get("/plugins/icons/groups", tenantScoped = false, timeout = java.time.Duration.ofSeconds(60)))
-                    .mapNotNull(::indexOf)
-                    .forEach { json -> json.entrySet().forEach { (key, value) -> merged.add(key, value) } }
-                // Not kept when the instance changed meanwhile: it is the old instance's index.
-                if (started == generation) index = merged
+            index ?: run {
+                check(!indexFailedAt.coolingDown()) { "the icon index failed to build a moment ago" }
+                JsonObject().also { merged ->
+                    try {
+                        listOf(api.pluginIcons(), api.get("/plugins/icons/groups", tenantScoped = false, timeout = java.time.Duration.ofSeconds(60)))
+                            .mapNotNull(::indexOf)
+                            .forEach { json -> json.entrySet().forEach { (key, value) -> merged.add(key, value) } }
+                    } catch (e: Exception) {
+                        if (started == generation) indexFailedAt = clock()
+                        throw e
+                    }
+                    // Not kept when the instance changed meanwhile: it is the old instance's index.
+                    if (started == generation) index = merged
+                }
             }
         }
         return all.icon(type, nested = false)
@@ -117,6 +132,7 @@ class PluginIcons : Disposable {
         cache.clear()
         failures.clear()
         index = null
+        indexFailedAt = null
     }
 
     companion object {

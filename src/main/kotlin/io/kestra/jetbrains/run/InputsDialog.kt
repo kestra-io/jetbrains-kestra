@@ -19,6 +19,7 @@ import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBUI
 import io.kestra.jetbrains.api.FormPart
 import io.kestra.jetbrains.flow.FlowInput
+import io.kestra.jetbrains.flow.FlowYaml
 import java.nio.file.Files
 import java.nio.file.Path
 import javax.swing.JComponent
@@ -44,12 +45,13 @@ class InputsDialog(private val project: Project, flowUid: String, private val in
         }.let { field -> Field(field) { field.text } }
         input.type == "SECRET" -> JBPasswordField().apply { text = input.defaultValue }.let { field -> Field(field) { String(field.password) } }
         // As in the VS Code extension: BOOL is a plain checkbox, always sent, only BOOLEAN can be left to the flow.
-        input.type == "BOOL" -> JBCheckBox().apply { isSelected = input.defaultValue.equals("true", ignoreCase = true) }
+        // A default is read as Kestra reads it, YAML 1.1: yes and on are true.
+        input.type == "BOOL" -> JBCheckBox().apply { isSelected = FlowYaml.yaml11(input.defaultValue) == true }
             .let { box -> Field(box) { box.isSelected.toString() } }
         // Tri-state: left on the first entry, the input is not sent and the flow's own default applies.
         input.type == "BOOLEAN" -> ComboBox(arrayOf("", "true", "false")).apply {
             renderer = SimpleListCellRenderer.create("") { it.ifEmpty { "(flow default)" } }
-            selectedItem = input.defaultValue.lowercase().takeIf { it == "true" || it == "false" } ?: ""
+            selectedItem = (FlowYaml.yaml11(input.defaultValue) as? Boolean)?.toString() ?: ""
         }.let { field -> Field(field) { field.selectedItem?.toString().orEmpty() } }
         input.type in setOf("SELECT", "ENUM") && input.values.isNotEmpty() -> ComboBox(input.values.toTypedArray()).apply {
             selectedItem = input.defaultValue.takeIf { it in input.values } ?: input.values.first()

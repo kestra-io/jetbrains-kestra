@@ -43,7 +43,7 @@ abstract class JcefView : Disposable {
         // The page's messages are handled on the EDT, parsed first: a malformed one is dropped, not thrown at the
         // browser's thread.
         query.addHandler { message ->
-            parseObject(message)?.let { json -> ApplicationManager.getApplication().invokeLater({ onMessage(json) }, { Disposer.isDisposed(this) }) }
+            parseObject(message)?.let { json -> ApplicationManager.getApplication().invokeLater({ onMessage(json) }, { browser.isDisposed }) }
             null
         }
         // Registered before the page loads: until it has, navigations go through; afterwards every one is cancelled.

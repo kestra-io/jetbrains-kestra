@@ -39,6 +39,18 @@ class InputsDialogTest : BasePlatformTestCase() {
         )
     }
 
+    // Kestra reads defaults as YAML 1.1: yes and on are true, no and off false.
+    fun testBooleanDefaultsAreReadAsYaml11() {
+        listOf("yes", "On", "TRUE").forEach { value ->
+            assertEquals(value, listOf<FormPart>(FormPart.Text("flag", "true")), parts(FlowInput("flag", "BOOL", required = false, defaultValue = value, values = emptyList())))
+            assertEquals(value, listOf<FormPart>(FormPart.Text("flag", "true")), parts(FlowInput("flag", "BOOLEAN", required = false, defaultValue = value, values = emptyList())))
+        }
+        listOf("no", "off").forEach { value ->
+            assertEquals(value, listOf<FormPart>(FormPart.Text("flag", "false")), parts(FlowInput("flag", "BOOL", required = false, defaultValue = value, values = emptyList())))
+            assertEquals(value, listOf<FormPart>(FormPart.Text("flag", "false")), parts(FlowInput("flag", "BOOLEAN", required = false, defaultValue = value, values = emptyList())))
+        }
+    }
+
     fun testMultiselectIsSentAsAJsonArrayOfTheValues() {
         assertEquals(
             listOf<FormPart>(FormPart.Text("colors", """["red","blue"]""")),

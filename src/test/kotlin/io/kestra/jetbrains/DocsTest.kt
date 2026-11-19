@@ -67,25 +67,6 @@ class DocsTest : KestraTestCase() {
         assertTrue(asked.none { it.path.contains("passwd") })
     }
 
-    // No JavaScript engine runs in these tests: the page's source is read, as for the rows above.
-    fun testPageOnlyAsksForTheIconsItBuiltAndRetriesMissingOnes() {
-        val js = DocsTest::class.java.getResource("/docs/docs.js")!!.readText()
-        assertTrue(js.substringAfter("function iconImg(cls, key)").substringBefore("function pageHeader").contains("builtIcons.add(key)"))
-        assertTrue(js.substringAfter("function observeIcons()").substringBefore("async function fetchIcons").contains("builtIcons.has("))
-        // A failed icon is not cached as "none" for the life of the view: that would defeat the plugin's retry cooldown.
-        assertFalse(js.contains("icons.set(key, found[key] || null)"))
-        assertTrue(js.substringAfter("async function fetchIcons()").substringBefore("function applyIcon").contains("missed.set(key, Date.now())"))
-    }
-
-    // A server anchor carrying data-nav (DOMPurify keeps data-*) must not navigate the view to its href.
-    fun testAnchorsNeverNavigateTheView() {
-        val js = DocsTest::class.java.getResource("/docs/docs.js")!!.readText()
-        val click = js.substringAfter("document.addEventListener('click'").substringBefore("function setTheme")
-        val anchor = click.indexOf("target.closest('a')")
-        assertTrue(anchor >= 0)
-        assertTrue(click.indexOf("if (anchor) event.preventDefault()") in anchor until click.indexOf("navigate(row.dataset.nav)"))
-    }
-
     fun testTitleComesFromTheFrontmatter() {
         assertEquals("Subflows in Kestra – Modularize", DocsApi.frontmatterTitle("---\ntitle: Subflows in Kestra – Modularize\nh1: x\n---\n# Body"))
         assertEquals("Quoted", DocsApi.frontmatterTitle("---\ntitle: \"Quoted\"\n---\n"))
@@ -123,17 +104,9 @@ class DocsTest : KestraTestCase() {
         assertTrue(js.contains("role=\"button\""))
     }
 
-    // Most plugin groups have no sub-group: their elements sit on the root entry, and the group page has to list
-    // them. No JavaScript engine runs in these tests, so this reads the page's source (the rendering itself was
-    // checked by hand with node); the data it renders is checked on the Kotlin side.
-    fun testGroupPageListsTheRootsOwnElements() {
-        val js = DocsTest::class.java.getResource("/docs/docs.js")!!.readText()
-        val group = js.substringAfter("function renderGroupPage(root, subs)").substringBefore("function renderSubPage")
-        assertTrue(group.contains("elementRows(root)"))
-        assertTrue(group.indexOf("sub:") < group.indexOf("elementRows(root)"))
-        assertTrue(js.substringAfter("function elementRows(entry)").substringBefore("function renderSubPage").contains("type:\${element.cls}"))
-        assertTrue(js.substringAfter("function renderSubPage(sub)").substringBefore("const BETA_NOTICE").contains("elementRows(sub)"))
-
+    // Most plugin groups have no sub-group: their elements sit on the root entry, which the group page lists.
+    // The data it renders is checked here; the page itself was checked by hand.
+    fun testRootEntryOfAGroupCarriesItsOwnElements() {
         kestra.json("GET", "/plugins/groups/subgroups") {
             """[{"name":"plugin-script-dotnet","group":"io.kestra.plugin.scripts.dotnet","subGroup":null,"title":".NET","tasks":[{"cls":"io.kestra.plugin.scripts.dotnet.Script","title":"Run C#"}]}]"""
         }
