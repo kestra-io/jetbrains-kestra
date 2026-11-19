@@ -177,12 +177,11 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
         then()
     }
 
-    // Lists again every folder already listed, then reloads the open files that changed on the instance.
-    // Completes once the tree and the open files were updated.
+    // Lists again every folder already listed. Completes once the tree was updated. An open file the listing found
+    // changed is read again by itself, even when a later folder fails to list, see KestraVirtualFile.invalidate.
     fun refresh(): CompletableFuture<Unit> {
         val roots = root.children().toList().mapNotNull { (it as DefaultMutableTreeNode).userObject as? KestraVirtualFile }
-        var reloading: CompletableFuture<Unit>? = null
-        val listed = background("Refreshing Kestra namespaces", {
+        return background("Refreshing Kestra namespaces", {
             fun walk(dir: KestraVirtualFile) {
                 if (!dir.isLoaded) return
                 fs.list(dir).filter { it.isDirectory }.forEach(::walk)
@@ -190,21 +189,7 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
             roots.forEach { if (it.isLoaded) walk(it) else fs.list(it) }
         }) {
             roots.forEach(::rebuild)
-            reloading = reloadOpenFiles()
         }
-        return listed.thenCompose { reloading ?: CompletableFuture.completedFuture(Unit) }
-    }
-
-    // The open files the listing found changed on the instance, and left without content: read again. Each read
-    // that lands shows itself in its editor, see KestraVirtualFile.contentLanded. A file that cannot be read keeps its
-    // old text, locked, and is read again by itself.
-    private fun reloadOpenFiles(): CompletableFuture<Unit> {
-        val stale = FileEditorManager.getInstance(project).openFiles.filterIsInstance<KestraVirtualFile>().filter { it.isValid && !it.hasContent }
-        if (stale.isEmpty()) return CompletableFuture.completedFuture(Unit)
-        return background("Reloading changed namespace files", {
-            // Every file is tried: one that fails must not leave the others locked.
-            stale.map { runCatching { it.load() } }.firstNotNullOfOrNull { it.exceptionOrNull() }?.let { throw it }
-        }) {}
     }
 
     fun openNamespace() {
@@ -230,9 +215,11 @@ class KestraNamespacesPanel(private val project: Project) : SimpleToolWindowPane
     }
 
     // The selected files, and the files under the selected folders, whose changes the instance has not accepted.
+    // Not a file still being saved: its upload would land after the discard, see NamespaceSaver.discardChanges.
     private fun unsyncedUnderSelection(): List<KestraVirtualFile> {
         val selected = selectedFiles()
-        return NamespaceSaver.instance.unsyncedFiles().filter { file -> selected.any { it === file || file.path.startsWith(it.path + "/") } }
+        val saver = NamespaceSaver.instance
+        return saver.unsyncedFiles().filter { file -> !saver.isSaving(file) && selected.any { it === file || file.path.startsWith(it.path + "/") } }
     }
 
     // Reachable at any time, unlike the buttons of the notification that reported the refused save, which expires.

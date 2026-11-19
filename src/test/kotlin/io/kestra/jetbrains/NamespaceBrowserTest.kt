@@ -193,7 +193,8 @@ class NamespaceBrowserTest : KestraTestCase() {
         val document = FileDocumentManager.getInstance().getDocument(file)!!
         WriteAction.run<RuntimeException> { document.setText("y") }
         FileDocumentManager.getInstance().saveDocument(document)
-        waitFor { notifications.any { it.title == "Not saved to Kestra" } }
+        // The failure is reported a moment before the save stops running.
+        waitFor { notifications.any { it.title == "Not saved to Kestra" } && !NamespaceSaver.instance.isSaving(file) }
         return file to notifications.single { it.title == "Not saved to Kestra" }
     }
 
@@ -652,6 +653,7 @@ class NamespaceBrowserTest : KestraTestCase() {
             assertFalse(document.isWritable)
             gate.release.countDown()
             waitUntilDone(refreshed)
+            waitFor { document.text == "# Changed on the instance" }
 
             assertEquals("# Changed on the instance", document.text)
             assertTrue(document.isWritable)
@@ -675,8 +677,10 @@ class NamespaceBrowserTest : KestraTestCase() {
         stored["/README.md"] = "# Changed on the instance"
         failReads = true
         waitUntilDone(panel.refresh())
+        waitFor { notifications.any { it.content.contains("could not be read from the instance yet") } }
 
-        assertTrue(notifications.toString(), notifications.any { it.content.contains("Reloading changed namespace files failed") })
+        assertTrue(notifications.toString(), notifications.any { it.content.contains("could not be read from the instance yet") })
+        assertFalse(document.isWritable)
         assertEquals("# Hello", document.text)
         assertTrue(notifications.toString(), notifications.none { it.title == "Not loaded from Kestra" || it.content.contains("shown empty") })
 
@@ -685,6 +689,65 @@ class NamespaceBrowserTest : KestraTestCase() {
 
         assertEquals("# Changed on the instance", document.text)
         assertTrue(document.isWritable)
+    }
+
+    // A namespace that fails to list must not leave the open files of the namespaces listed before it locked.
+    fun testChangedOpenFileIsReloadedWhenALaterNamespaceFailsToList() {
+        val panel = KestraNamespacesPanel(project)
+        Disposer.register(testRootDisposable, panel)
+        panel.open("company.team")
+        waitFor { rows(panel).size >= 4 }
+        // The fake instance has no such namespace: listing it fails, after company.team was listed.
+        panel.open("missing.team")
+        Disposer.register(testRootDisposable) { project.service<io.kestra.jetbrains.namespace.KestraNamespaces>().remove("missing.team") }
+        val readme = KestraFileSystem.instance.findFileByPath("$instance/company.team/README.md") as KestraVirtualFile
+        FileEditorManager.getInstance(project).openFile(readme, true)
+        val document = FileDocumentManager.getInstance().getDocument(readme)!!
+        waitFor { document.text == "# Hello" }
+
+        modifiedTime = 2
+        stored["/README.md"] = "# Changed on the instance"
+        waitUntilDone(panel.refresh())
+        waitFor { document.text == "# Changed on the instance" }
+
+        assertTrue(notifications.toString(), notifications.any { it.content.contains("Refreshing Kestra namespaces failed") })
+        assertEquals("# Changed on the instance", document.text)
+        assertTrue(document.isWritable)
+    }
+
+    // Discarding while the file's upload is in flight would let that upload land after the discard: the instance
+    // would keep the edit while the editor shows the old version as saved. Not offered, and refused if asked.
+    fun testDiscardIsRefusedWhileTheFileIsBeingSaved() {
+        stored["/slowwrite.txt"] = "x"
+        val panel = KestraNamespacesPanel(project)
+        Disposer.register(testRootDisposable, panel)
+        panel.open("company.team")
+        waitFor { "slowwrite.txt" in rows(panel) }
+        val file = KestraFileSystem.instance.findFileByPath("$instance/company.team/slowwrite.txt") as KestraVirtualFile
+        FileEditorManager.getInstance(project).openFile(file, true)
+        val document = FileDocumentManager.getInstance().getDocument(file)!!
+        waitFor { document.text == "x" }
+        val release = CountDownLatch(1).also { writeGate = it }
+        WriteAction.run<RuntimeException> { document.setText("y") }
+        FileDocumentManager.getInstance().saveDocument(document)
+        assertTrue(NamespaceSaver.instance.isSaving(file))
+
+        // The tool window does not offer it: no question is asked.
+        select(panel, "slowwrite.txt")
+        TestDialogManager.setTestDialog { message -> dialogs += message; Messages.OK }
+        panel.discardLocalChanges()
+        assertEquals(emptyList<String>(), dialogs)
+
+        // Asked anyway, from the notification of an earlier refused save: refused, the edit is kept.
+        NamespaceSaver.instance.discardChanges(file)
+        waitFor { notifications.any { it.title == "Not discarded" } }
+        assertTrue(notifications.toString(), notifications.any { it.title == "Not discarded" && it.content.contains("in progress") })
+        assertEquals("y", document.text)
+
+        release.countDown()
+        waitFor { !NamespaceSaver.instance.hasUnsyncedChanges(file) }
+        assertEquals("y", stored["/slowwrite.txt"])
+        assertEquals("y", document.text)
     }
 
     fun testExcludedFoldersAreHiddenAndFilesOfAnotherInstanceAreNotListed() {

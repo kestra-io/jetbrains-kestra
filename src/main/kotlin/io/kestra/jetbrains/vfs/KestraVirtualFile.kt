@@ -179,12 +179,17 @@ class KestraVirtualFile internal constructor(
     // document until it does. Unless this IDE holds text the instance does not have. Decided on the EDT, where
     // typing happens: an edit made a moment ago is seen, and the document never ends up edited and unlocked
     // without content.
+    // An open document starts that read right away: it is unlocked and shows the new text once it lands (see
+    // contentLanded), whatever else the listing that found the change did. A failed read keeps the old text, says
+    // why, and is tried again by itself, see retryLater.
     internal fun invalidate() {
         if (directory) return
         onEdt {
             if (hasLocalChanges) return@onEdt
             content = null
-            FileDocumentManager.getInstance().getCachedDocument(this)?.setReadOnly(true)
+            val document = FileDocumentManager.getInstance().getCachedDocument(this) ?: return@onEdt
+            document.setReadOnly(true)
+            prefetch().whenComplete { _, error -> if (error != null) explainBlankDocument() }
         }
     }
 

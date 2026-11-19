@@ -35,6 +35,9 @@ class NamespaceSaver {
     // True while the content of the file is not on the instance: a save is queued, in flight, or was refused.
     fun hasUnsyncedChanges(file: KestraVirtualFile) = pending.containsKey(file) || file in running || file in failed
 
+    // A save of the file is queued or in flight.
+    fun isSaving(file: KestraVirtualFile) = pending.containsKey(file) || file in running
+
     // Files whose last content is not on the instance: queued, in flight, or refused.
     fun unsyncedFiles(): List<KestraVirtualFile> = (pending.keys + running + failed).filter { it.isValid }.distinct()
 
@@ -64,12 +67,22 @@ class NamespaceSaver {
         UnsavedCopies.keep(files.mapNotNull { file -> (pending[file] ?: file.content)?.let { file to it } })
     }
 
-    // The way out of a refused or stuck save: the instance's version replaces the local one, in the editor too.
-    // The changes are kept when the instance cannot be read.
+    // The way out of a refused save: the instance's version replaces the local one, in the editor too.
+    // The changes are kept when the instance cannot be read, and while a save of the file is queued or in flight:
+    // that upload would land after the discard, so the instance would keep the discarded edit while the editor
+    // shows its old version as saved. Checked again on the EDT right before the swap, as saves start on the EDT.
     fun discardChanges(file: KestraVirtualFile) {
+        if (isSaving(file)) {
+            notifyDiscardFailed(file, IllegalStateException("a save to the instance is in progress"))
+            return
+        }
         ApplicationManager.getApplication().executeOnPooledThread {
             val read = runCatching { file.fileSystem.read(file) }
             ApplicationManager.getApplication().invokeLater({
+                if (isSaving(file)) {
+                    notifyDiscardFailed(file, IllegalStateException("a save to the instance started meanwhile"))
+                    return@invokeLater
+                }
                 read.onSuccess { bytes ->
                     discard(file)
                     file.adopt(bytes)
