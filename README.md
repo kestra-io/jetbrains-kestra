@@ -65,7 +65,7 @@ The plugin uses the IDE's proxy settings (*Settings | Appearance & Behavior | Sy
 
 ### Schema and completion
 
-The flow schema is downloaded from the configured instance, so it matches its installed plugin versions. It is cached per instance, downloaded when the URL changes or after signing in, and *Tools | Kestra | Download Kestra Schema* forces a refresh, for example after installing a plugin on the instance.
+The flow schema is downloaded from the configured instance, so it matches its installed plugin versions. It is cached for the configured instance only (a download that fails, or an answer that is not a JSON schema, keeps the cached one), downloaded when the URL changes or after signing in, and *Tools | Kestra | Download Kestra Schema* forces a refresh, for example after installing a plugin on the instance.
 
 The schema attaches to any YAML file detected as a flow (it declares `id`, `namespace`, and `tasks` or `triggers`), and to YAML files under a `_flows` directory.
 
