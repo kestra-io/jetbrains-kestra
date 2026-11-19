@@ -2,19 +2,19 @@ package io.kestra.jetbrains.run
 
 import com.google.gson.Gson
 import com.google.gson.JsonParser
-import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.fileChooser.FileChooserDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.openapi.ui.ValidationInfo
-import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
+import com.intellij.ui.dsl.listCellRenderer.textListCellRenderer
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBUI
 import io.kestra.jetbrains.api.FormPart
@@ -41,7 +41,7 @@ class InputsDialog(private val project: Project, flowUid: String, private val in
 
     private fun fieldFor(input: FlowInput): Field = when {
         input.type == "FILE" -> TextFieldWithBrowseButton().apply {
-            addBrowseFolderListener(project, FileChooserDescriptorFactory.createSingleFileDescriptor().withTitle("Select File for ${input.id}"))
+            addBrowseFolderListener(project, FileChooserDescriptor(true, false, false, false, false, false).withTitle("Select File for ${input.id}"))
         }.let { field -> Field(field) { field.text } }
         input.type == "SECRET" -> JBPasswordField().apply { text = input.defaultValue }.let { field -> Field(field) { String(field.password) } }
         // As in the VS Code extension: BOOL is a plain checkbox, always sent, only BOOLEAN can be left to the flow.
@@ -50,7 +50,7 @@ class InputsDialog(private val project: Project, flowUid: String, private val in
             .let { box -> Field(box) { box.isSelected.toString() } }
         // Tri-state: left on the first entry, the input is not sent and the flow's own default applies.
         input.type == "BOOLEAN" -> ComboBox(arrayOf("", "true", "false")).apply {
-            renderer = SimpleListCellRenderer.create("") { it.ifEmpty { "(flow default)" } }
+            renderer = textListCellRenderer<String> { it.ifEmpty { "(flow default)" } }
             selectedItem = (FlowYaml.yaml11(input.defaultValue) as? Boolean)?.toString() ?: ""
         }.let { field -> Field(field) { field.selectedItem?.toString().orEmpty() } }
         input.type in setOf("SELECT", "ENUM") && input.values.isNotEmpty() -> ComboBox(input.values.toTypedArray()).apply {

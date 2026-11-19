@@ -1,6 +1,5 @@
 package io.kestra.jetbrains.schema
 
-import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.Service
@@ -71,10 +70,8 @@ class KestraSchemaService {
         LocalFileSystem.getInstance().refreshAndFindFileByNioFile(directory)?.refresh(false, true)
         ApplicationManager.getApplication().invokeLater {
             for (project in ProjectManager.getInstance().openProjects) {
-                if (!project.isDisposed) {
-                    JsonSchemaService.Impl.get(project).reset()
-                    DaemonCodeAnalyzer.getInstance(project).restart()
-                }
+                // reset() also restarts the highlighting of the project's open files.
+                if (!project.isDisposed) JsonSchemaService.Impl.get(project).reset()
             }
         }
     }

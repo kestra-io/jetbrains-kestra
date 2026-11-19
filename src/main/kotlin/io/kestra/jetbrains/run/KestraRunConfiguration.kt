@@ -10,7 +10,7 @@ import com.intellij.execution.configurations.RunProfileState
 import com.intellij.execution.configurations.RuntimeConfigurationError
 import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.openapi.components.BaseState
-import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.fileChooser.FileChooserDescriptor
 import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
@@ -77,7 +77,7 @@ class KestraRunConfiguration(project: Project, factory: ConfigurationFactory, na
 
     private class Editor(project: Project) : SettingsEditor<KestraRunConfiguration>() {
         private val file = TextFieldWithBrowseButton().apply {
-            addBrowseFolderListener(project, FileChooserDescriptorFactory.createSingleFileDescriptor().withTitle("Select Flow File"))
+            addBrowseFolderListener(project, FileChooserDescriptor(true, false, false, false, false, false).withTitle("Select Flow File"))
         }
 
         override fun resetEditorFrom(configuration: KestraRunConfiguration) {
