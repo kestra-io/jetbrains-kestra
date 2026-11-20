@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+    body { margin: 0; font-family: var(--ks-font); }
+    .toolbar .back, .toolbar .search, .crumb, .nav-row, .result { font-family: inherit; }
+/*STYLE*/
+</style>
+</head>
+<body>
+<div class="toolbar"><button id="back" class="back" title="Back" disabled>‹</button><input id="search" class="search" type="search" placeholder="Search the docs"></div>
+<div id="results" class="results" hidden></div>
+<nav id="crumbs" class="crumbs" hidden></nav>
+<h1 id="title" class="doc-title"></h1>
+<article id="content" class="content">Loading…</article>
+<script>/*BRIDGE*/</script>
+<script>/*MARKDOWN_IT*/</script>
+<script>/*CONTAINER*/</script>
+<script>/*PURIFY*/</script>
+<script>/*DOCS*/</script>
+</body>
+</html>

@@ -1,0 +1,107 @@
+<idea-plugin>
+    <id>io.kestra.jetbrains</id>
+    <name>Kestra</name>
+    <vendor url="https://kestra.io">Kestra</vendor>
+    <description><![CDATA[
+        <p>Author and run <a href="https://kestra.io">Kestra</a> flows from your JetBrains IDE, backed by the Kestra instance you connect to.</p>
+        <ul>
+            <li><b>Instance-aware schema</b>: task and property completion and structural validation from the plugin versions installed on your instance.</li>
+            <li><b>Live validation</b>: the instance's validate endpoint runs as you type and reports the same errors as <code>flow validate</code>.</li>
+            <li><b><code>{{ }}</code> completion</b>: variables, task outputs, inputs, secrets, KV pairs, namespace files, functions and filters.</li>
+            <li><b>Run from the IDE</b>: validate, deploy and execute the open flow, enter its inputs, and follow logs and task states in the Run tool window. Stop kills the execution.</li>
+            <li><b>Namespace files</b>: browse and edit the files of a namespace, upload files, or sync a folder to it.</li>
+            <li><b>Documentation</b>: the Kestra docs beside the editor, versioned to the instance, following the task under the cursor.</li>
+            <li><b>Topology preview</b>: the flow's graph beside the editor as you type, colored live during a run.</li>
+        </ul>
+        <p>Set your instance in <i>Settings | Tools | Kestra</i>.</p>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.yaml</depends>
+    <depends>com.intellij.modules.json</depends>
+    <!-- The topology and documentation views. JCEF is part of the platform up to 2025.3 and a bundled plugin from 2026.x.
+         Optional, because builds before 2025.3.6 (2024.3 included) do not declare this module and would refuse a required
+         one; their platform class loader already has the JCEF classes. When present, an optional dependency still adds its
+         classes to the plugin class loader. -->
+    <depends optional="true" config-file="kestra-jcef.xml">com.intellij.modules.jcef</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationConfigurable parentId="tools" instance="io.kestra.jetbrains.settings.KestraConfigurable"
+                                 id="io.kestra.jetbrains.settings" displayName="Kestra"/>
+        <notificationGroup id="Kestra" displayType="BALLOON"/>
+        <postStartupActivity implementation="io.kestra.jetbrains.KestraStartupActivity"/>
+
+        <externalAnnotator language="yaml" implementationClass="io.kestra.jetbrains.validation.KestraValidationAnnotator"/>
+
+        <completion.contributor language="yaml" order="first"
+                                implementationClass="io.kestra.jetbrains.completion.PebbleCompletionContributor"/>
+        <completion.confidence language="yaml" order="first"
+                               implementationClass="io.kestra.jetbrains.completion.PebbleCompletionConfidence"/>
+        <typedHandler implementation="io.kestra.jetbrains.completion.PebbleTypedHandler"/>
+
+        <configurationType implementation="io.kestra.jetbrains.run.KestraRunConfigurationType"/>
+        <runConfigurationProducer implementation="io.kestra.jetbrains.run.KestraRunConfigurationProducer"/>
+        <runLineMarkerContributor language="yaml" implementationClass="io.kestra.jetbrains.run.KestraRunLineMarkerContributor"/>
+
+        <toolWindow id="Kestra Topology" anchor="right" secondary="false" icon="/icons/kestra.svg" doNotActivateOnStart="true"
+                    factoryClass="io.kestra.jetbrains.topology.KestraTopologyToolWindowFactory"/>
+
+        <toolWindow id="Kestra Documentation" anchor="right" icon="/icons/kestra.svg" doNotActivateOnStart="true"
+                    factoryClass="io.kestra.jetbrains.docs.KestraDocsToolWindowFactory"/>
+        <toolWindow id="Kestra Namespaces" anchor="left" secondary="true" icon="/icons/kestra.svg" doNotActivateOnStart="true"
+                    factoryClass="io.kestra.jetbrains.namespace.KestraNamespacesToolWindowFactory"/>
+        <virtualFileSystem key="kestra" implementationClass="io.kestra.jetbrains.vfs.KestraFileSystem" physical="false"/>
+        <notificationGroup id="Kestra Namespace Files" displayType="STICKY_BALLOON"/>
+
+        <json.jsonSchemaCompletionCustomizer implementation="io.kestra.jetbrains.schema.KestraSchemaCompletionCustomizer"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="JavaScript.JsonSchema">
+        <ProviderFactory implementation="io.kestra.jetbrains.schema.KestraSchemaProviderFactory"/>
+    </extensions>
+
+    <applicationListeners>
+        <listener class="io.kestra.jetbrains.vfs.SaveOnExit" topic="com.intellij.ide.AppLifecycleListener"/>
+    </applicationListeners>
+
+    <actions>
+        <group id="Kestra.Menu" text="Kestra" popup="true" icon="/icons/kestra.svg">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="Kestra.SaveFlow" class="io.kestra.jetbrains.actions.SaveFlowAction"
+                    text="Save Flow to Kestra" description="Deploy the flow in the editor to the Kestra instance without running it"
+                    icon="AllIcons.Actions.MenuSaveall"/>
+            <action id="Kestra.OpenDocumentation" class="io.kestra.jetbrains.actions.OpenDocumentationAction"
+                    text="Open Kestra Documentation" description="Show the Kestra documentation beside the editor"
+                    icon="AllIcons.Actions.Help"/>
+            <action id="Kestra.ShowTopology" class="io.kestra.jetbrains.actions.ShowTopologyAction"
+                    text="Show Flow Topology" description="Preview the graph of the flow in the editor"/>
+            <separator/>
+            <action id="Kestra.OpenNamespace" class="io.kestra.jetbrains.actions.OpenNamespaceAction"
+                    text="Open Namespace…" description="Browse and edit the files of a namespace on the Kestra instance"/>
+            <action id="Kestra.UploadToNamespace" class="io.kestra.jetbrains.actions.UploadToNamespaceAction"
+                    text="Upload to Kestra Namespace…" description="Upload the selected files and folders to a namespace of the Kestra instance"/>
+            <action id="Kestra.SyncFolderToNamespace" class="io.kestra.jetbrains.actions.SyncFolderToNamespaceAction"
+                    text="Sync Folder to Kestra Namespace…" description="Upload every file of a folder to a namespace of the Kestra instance"/>
+            <separator/>
+            <action id="Kestra.DownloadSchema" class="io.kestra.jetbrains.actions.DownloadSchemaAction"
+                    text="Download Kestra Schema" description="Refresh the flow schema from the Kestra instance"/>
+            <separator/>
+            <action id="Kestra.SignIn" class="io.kestra.jetbrains.actions.SignInAction"
+                    text="Sign In…" description="Set the credentials for the Kestra instance"/>
+            <action id="Kestra.SignOut" class="io.kestra.jetbrains.actions.SignOutAction"
+                    text="Sign Out" description="Forget the credentials for the Kestra instance"/>
+        </group>
+        <reference ref="Kestra.SaveFlow">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </reference>
+        <reference ref="Kestra.ShowTopology">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </reference>
+        <group id="Kestra.ProjectViewNamespace">
+            <separator/>
+            <reference ref="Kestra.UploadToNamespace"/>
+            <reference ref="Kestra.SyncFolderToNamespace"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </group>
+    </actions>
+</idea-plugin>

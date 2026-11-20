@@ -1,5 +1,124 @@
+<p align="center">
+  <a href="https://www.kestra.io">
+    <img src="https://kestra.io/banner.png" alt="Kestra workflow orchestrator" />
+  </a>
+</p>
+
+<h3 align="center" style="border-bottom: none">
+    Event-Driven Declarative Orchestrator
+</h3>
+
+<div align="center">
+  <a href="https://kestra.io"><img src="https://img.shields.io/badge/Website-kestra.io-192A4E?color=blueviolet" alt="Kestra"></a>
+  <a href="https://kestra.io/slack"><img src="https://img.shields.io/badge/Slack-Join%20Community-blueviolet?logo=slack" alt="Slack"></a>
+</div>
+
+<br />
+
 # Kestra for JetBrains IDEs
 
-Author and run [Kestra](https://kestra.io) flows in IntelliJ IDEA, PyCharm, WebStorm and the other JetBrains IDEs.
+Author and run Kestra flows in IntelliJ IDEA, PyCharm, WebStorm and the other JetBrains IDEs: completion and validation from the plugins installed on your instance, `{{ }}` autocompletion, and runs with live logs, all backed by the Kestra instance you connect to.
 
-Work in progress, see [kestra-io/kestra#3060](https://github.com/kestra-io/kestra/issues/3060).
+## Features
+
+- **Instance-aware schema**: task, trigger and property completion plus structural validation from your instance's installed plugin versions. Once a task declares its `type`, only that plugin's properties are suggested.
+- **Live validation** as you type: the instance's validate endpoint runs on the flow and reports the same errors as `flow validate`, on the line they concern.
+- **`{{ }}` autocompletion** for Pebble expressions: on Kestra 2.0+ the instance reports what this exact flow can reference, including nested task outputs, inputs, secrets, KV pairs and namespace files. Functions and filters come from the instance. A built-in list covers 1.x, and flows that do not parse yet.
+- **Run from the IDE**: validate, deploy and execute the open flow, enter its inputs, and follow the execution in the Run tool window: its state, one section per task run with its state, duration and logs, a log level filter, and a link to the execution in the Kestra UI. **Stop** kills the execution.
+- **Documentation**: the Kestra docs beside the editor, versioned to the instance, with search, the plugin browser, and the documentation of the task under the cursor.
+- **Topology preview**: the flow's graph beside the editor, updated as you type and colored live during a run. Click a task to jump to it.
+- **Namespace files**: browse and edit the files of a namespace on the instance, upload files, or sync a folder to it.
+- **Save to Kestra**: deploy the flow without running it.
+
+## Requirements
+
+- A JetBrains IDE 2024.3 or later: IntelliJ IDEA, PyCharm, WebStorm, GoLand, and the other IDEs built on the IntelliJ Platform.
+- A Kestra instance, 1.x or 2.x. `{{ }}` completion from the instance needs 2.0 or later.
+
+## Installation
+
+### From the JetBrains Marketplace
+
+In the IDE, open *Settings | Plugins | Marketplace*, search for **Kestra**, click *Install* and restart the IDE. Updates arrive through the IDE.
+
+### From an archive
+
+For machines that cannot reach the Marketplace, download the `.zip` attached to a [GitHub release](https://github.com/kestra-io/jetbrains-kestra/releases), then open *Settings | Plugins | ⚙ | Install Plugin from Disk…*, select the archive, and restart the IDE.
+
+### Pre-releases
+
+Pre-release versions are published to the `beta` channel. To get them, open *Settings | Plugins | ⚙ | Manage Plugin Repositories…* and add:
+
+```
+https://plugins.jetbrains.com/plugins/beta/list
+```
+
+## Setup
+
+Open *Settings | Tools | Kestra* and set the URL of your instance, for example `http://localhost:8080`, and its tenant if it is multi-tenant. The setting applies to every project.
+
+On a secured instance, click **Sign In…** (or *Tools | Kestra | Sign In…*). It supports basic auth (username and password), an Enterprise Edition API token (sent as a Bearer token), and a legacy JWT session token. Credentials are stored in the IDE password safe, per instance URL. *Tools | Kestra | Sign Out* clears them. When a request is refused, a notification offers to sign in.
+
+The plugin uses the IDE's proxy settings (*Settings | Appearance & Behavior | System Settings | HTTP Proxy*) and the certificates the IDE trusts (*Settings | Tools | Server Certificates*), so an instance behind an internal certificate authority works once its certificate is accepted there.
+
+## Usage
+
+### Schema and completion
+
+The flow schema is downloaded from the configured instance, so it matches its installed plugin versions. It is cached for the configured instance only (a download that fails, or an answer that is not a JSON schema, keeps the cached one), downloaded when the URL changes or after signing in, and *Tools | Kestra | Download Kestra Schema* forces a refresh, for example after installing a plugin on the instance.
+
+The schema attaches to any YAML file detected as a flow (it declares `id`, `namespace`, and `tasks` or `triggers`), and to YAML files under a `_flows` directory.
+
+### Live validation
+
+While a flow file is open, its content is sent to the instance's validate endpoint, and the errors and warnings it returns are shown in the editor and in the *Problems* tool window.
+
+### Expressions
+
+Inside `{{ }}`, completion opens on `{{`, `.` and `|`, and on demand with the usual completion shortcut: variables (`inputs`, `outputs`, `vars`, `execution`…), their members, task outputs, secrets, KV pairs and namespace files, then functions after a name and filters after `|`.
+
+### Running a flow
+
+Click the ▶ icon next to the flow's `id`, or use *Run* from the editor's context menu. The plugin validates the flow, deploys the current editor content (saved or not), asks for its inputs, starts an execution, and follows it in the Run tool window:
+
+- a header with the execution state, **Copy logs**, and **Open in Kestra**,
+- the run's progress and any validation or deployment errors,
+- one section per task run with its state and duration. Click a section to show its logs; a failed task opens by itself.
+
+The **Log level** selector filters the logs shown. It starts at *Settings | Tools | Kestra | Default log level*. **Stop** kills the execution on the instance. The run is saved as a *Kestra flow* run configuration, so it can be started again from the toolbar.
+
+### Documentation
+
+*Tools | Kestra | Open Kestra Documentation* opens the *Kestra Documentation* tool window, like the docs tab of the Kestra UI: search the docs, browse the plugins and their tasks with breadcrumbs, and read pages matching the version of the connected instance. While it is shown, placing the cursor on a task, trigger or condition shows that plugin's documentation, with its examples, properties and outputs, as installed on the instance. Links open in the browser.
+
+### Topology preview
+
+*Show Flow Topology* in the editor's context menu or *Tools | Kestra* opens the *Kestra Topology* tool window. It draws the graph of the flow in the editor, as the instance computes it, with plugin icons, and follows the editor as you type or switch files. While the flow runs from the IDE, each task is outlined with its state. Click a task to move the cursor to it, and use ⟳ to switch between a vertical and a horizontal layout.
+
+The preview uses the IDE's embedded browser (JCEF), which every JetBrains IDE ships with.
+
+### Namespace files
+
+*Tools | Kestra | Open Namespace…*, or **+** in the *Kestra Namespaces* tool window, opens a namespace as a folder of the instance: browse, open, create, rename and delete its files from the tool window, or upload local files into one of its folders. There is no local copy. Files are read from the instance when opened, and each save is uploaded in the background so the editor never waits on the instance. A refused save shows a notification with the instance's reason, a *Retry* action and a *Discard local changes* action; the file keeps your edit, whatever a Refresh finds, until you discard it, which is also *Discard Local Changes…* in the tool window. A file that could not be read yet opens empty and read-only, and is read again by itself until it opens. Refresh lists the folders again and reloads the open files that changed on the instance. The namespaces you open are reopened with the project.
+
+Quitting or restarting the IDE saves the open files, waits for the uploads (you can cancel the wait), then lists the files the instance did not take and asks whether to *Quit Anyway* or *Keep Open*. Quitting anyway keeps a copy of each of them in the IDE's system directory, `kestra-unsaved`, and tells you at the next start.
+
+The `_flows` folder holds the namespace's flows as `<id>.yml` files, with completion, validation, run and topology like any flow. Saving one updates the flow, which the instance validates first; a new `.yml` file there creates a flow from a template, and deleting one deletes the flow. Flows cannot be renamed, since their id is their name.
+
+An opened file stays bound to the instance it was read from: after switching to another instance in the settings, saving it is refused rather than written to the new instance. `.git`, `.vscode` and `.idea` folders are hidden and cannot be created inside a namespace.
+
+*Upload to Kestra Namespace…* in the Project view's context menu or *Tools | Kestra* uploads the selected files and folders to a namespace. Pick the namespace from those the instance lists, or type a new one, which is created after a confirmation. A single file goes to the exact path you enter. A selection goes under a base path, each folder keeping its name. An open file is uploaded with its unsaved changes.
+
+*Sync Folder to Kestra Namespace…* uploads every file of a folder, the selected one or one you pick. Files at the same path are overwritten, and files that exist only on the instance are kept.
+
+Names listed in *Settings | Tools | Kestra | Excluded names* are skipped: metadata and secrets such as `.git`, `.env` and `*.pem` by default. A leading or trailing `*` is a wildcard.
+
+Uploads respect the instance's permissions: a refused upload stops the batch and reports the reason given by the instance.
+
+### Saving a flow
+
+To deploy the flow without running it, use *Save Flow to Kestra* from the editor's context menu or *Tools | Kestra*.
+
+## Feedback
+
+Report bugs and request features in the [issues](https://github.com/kestra-io/jetbrains-kestra/issues). See [CONTRIBUTING.md](CONTRIBUTING.md) to build the plugin locally.

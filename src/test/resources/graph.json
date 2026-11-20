@@ -1,0 +1,213 @@
+{
+ "nodes": [
+  {
+   "uid": "root.root-aYIoTO3265ZboWwYebEso",
+   "type": "io.kestra.core.models.hierarchies.GraphClusterRoot"
+  },
+  {
+   "uid": "root.end-6gWLwYm50kgR86HGXzsmYr",
+   "type": "io.kestra.core.models.hierarchies.GraphClusterEnd"
+  },
+  {
+   "uid": "root.Triggers.root-54A1IBf2zmVHcrw6IkoPQt",
+   "type": "io.kestra.core.models.hierarchies.GraphClusterRoot"
+  },
+  {
+   "uid": "root.Triggers.end-4h9X3fFnxXZkPCcoADnguo",
+   "type": "io.kestra.core.models.hierarchies.GraphClusterEnd"
+  },
+  {
+   "triggerDeclaration": {
+    "id": "daily",
+    "type": "io.kestra.plugin.core.trigger.Schedule",
+    "cron": "0 9 * * *"
+   },
+   "uid": "root.Triggers.daily",
+   "type": "io.kestra.core.models.hierarchies.GraphTrigger"
+  },
+  {
+   "uid": "root.greet",
+   "type": "io.kestra.core.models.hierarchies.GraphTask",
+   "task": {
+    "id": "greet",
+    "type": "io.kestra.plugin.core.debug.Return",
+    "format": "hi"
+   },
+   "relationType": "SEQUENTIAL"
+  },
+  {
+   "uid": "root.par.root-2z6mh1xVR5wijh4ZKONAV4",
+   "type": "io.kestra.core.models.hierarchies.GraphClusterRoot"
+  },
+  {
+   "uid": "root.par.end-5xex7PRA4qclrmlOwDw9FT",
+   "type": "io.kestra.core.models.hierarchies.GraphClusterEnd"
+  },
+  {
+   "uid": "root.par",
+   "type": "io.kestra.core.models.hierarchies.GraphTask",
+   "task": {
+    "id": "par",
+    "type": "io.kestra.plugin.core.flow.Parallel",
+    "tasks": [
+     {
+      "id": "a",
+      "type": "io.kestra.plugin.core.log.Log",
+      "message": "a"
+     },
+     {
+      "id": "b",
+      "type": "io.kestra.plugin.core.log.Log",
+      "message": "b"
+     }
+    ]
+   },
+   "relationType": "PARALLEL"
+  },
+  {
+   "uid": "root.par.a",
+   "type": "io.kestra.core.models.hierarchies.GraphTask",
+   "task": {
+    "id": "a",
+    "type": "io.kestra.plugin.core.log.Log",
+    "message": "a"
+   },
+   "relationType": "PARALLEL"
+  },
+  {
+   "uid": "root.par.b",
+   "type": "io.kestra.core.models.hierarchies.GraphTask",
+   "task": {
+    "id": "b",
+    "type": "io.kestra.plugin.core.log.Log",
+    "message": "b"
+   },
+   "relationType": "PARALLEL"
+  }
+ ],
+ "edges": [
+  {
+   "source": "root.root-aYIoTO3265ZboWwYebEso",
+   "target": "root.greet",
+   "relation": {}
+  },
+  {
+   "source": "root.Triggers.end-4h9X3fFnxXZkPCcoADnguo",
+   "target": "root.root-aYIoTO3265ZboWwYebEso",
+   "relation": {}
+  },
+  {
+   "source": "root.greet",
+   "target": "root.par.root-2z6mh1xVR5wijh4ZKONAV4",
+   "relation": {
+    "relationType": "SEQUENTIAL"
+   }
+  },
+  {
+   "source": "root.par.end-5xex7PRA4qclrmlOwDw9FT",
+   "target": "root.end-6gWLwYm50kgR86HGXzsmYr",
+   "relation": {}
+  },
+  {
+   "source": "root.Triggers.root-54A1IBf2zmVHcrw6IkoPQt",
+   "target": "root.Triggers.daily",
+   "relation": {}
+  },
+  {
+   "source": "root.Triggers.daily",
+   "target": "root.Triggers.end-4h9X3fFnxXZkPCcoADnguo",
+   "relation": {}
+  },
+  {
+   "source": "root.par.root-2z6mh1xVR5wijh4ZKONAV4",
+   "target": "root.par",
+   "relation": {}
+  },
+  {
+   "source": "root.par",
+   "target": "root.par.a",
+   "relation": {
+    "relationType": "PARALLEL"
+   }
+  },
+  {
+   "source": "root.par",
+   "target": "root.par.b",
+   "relation": {
+    "relationType": "PARALLEL"
+   }
+  },
+  {
+   "source": "root.par.a",
+   "target": "root.par.end-5xex7PRA4qclrmlOwDw9FT",
+   "relation": {}
+  },
+  {
+   "source": "root.par.b",
+   "target": "root.par.end-5xex7PRA4qclrmlOwDw9FT",
+   "relation": {}
+  }
+ ],
+ "clusters": [
+  {
+   "cluster": {
+    "uid": "cluster_root.Triggers",
+    "type": "io.kestra.core.models.hierarchies.GraphCluster",
+    "finally": {
+     "uid": "root.Triggers.finally-ri46R5IgCpwtxtkUrNqIU",
+     "type": "io.kestra.core.models.hierarchies.GraphClusterFinally"
+    }
+   },
+   "nodes": [
+    "root.Triggers.root-54A1IBf2zmVHcrw6IkoPQt",
+    "root.Triggers.end-4h9X3fFnxXZkPCcoADnguo",
+    "root.Triggers.daily"
+   ],
+   "parents": [],
+   "start": "root.Triggers.root-54A1IBf2zmVHcrw6IkoPQt",
+   "end": "root.Triggers.end-4h9X3fFnxXZkPCcoADnguo"
+  },
+  {
+   "cluster": {
+    "uid": "cluster_root.par",
+    "type": "io.kestra.core.models.hierarchies.GraphCluster",
+    "relationType": "PARALLEL",
+    "taskNode": {
+     "uid": "root.par",
+     "type": "io.kestra.core.models.hierarchies.GraphTask",
+     "task": {
+      "id": "par",
+      "type": "io.kestra.plugin.core.flow.Parallel",
+      "tasks": [
+       {
+        "id": "a",
+        "type": "io.kestra.plugin.core.log.Log",
+        "message": "a"
+       },
+       {
+        "id": "b",
+        "type": "io.kestra.plugin.core.log.Log",
+        "message": "b"
+       }
+      ]
+     },
+     "relationType": "PARALLEL"
+    },
+    "finally": {
+     "uid": "par.finally-5cR4NAHwp7EgsZPTrRm2QB",
+     "type": "io.kestra.core.models.hierarchies.GraphClusterFinally"
+    }
+   },
+   "nodes": [
+    "root.par.root-2z6mh1xVR5wijh4ZKONAV4",
+    "root.par.end-5xex7PRA4qclrmlOwDw9FT",
+    "root.par",
+    "root.par.a",
+    "root.par.b"
+   ],
+   "parents": [],
+   "start": "root.par.root-2z6mh1xVR5wijh4ZKONAV4",
+   "end": "root.par.end-5xex7PRA4qclrmlOwDw9FT"
+  }
+ ]
+}
