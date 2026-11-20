@@ -5,6 +5,8 @@ the plugin's change notes, shown in the IDE's *What's New* tab and on the Market
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-20
+
 ### Added
 
 - Task, trigger and property completion and structural validation from the schema of the connected instance,
@@ -21,3 +23,6 @@ the plugin's change notes, shown in the IDE's *What's New* tab and on the Market
   namespace from its `_flows` folder.
 - Sign in with basic auth, an Enterprise Edition API token or a JWT session token, stored in the IDE password
   safe.
+
+[Unreleased]: https://github.com/kestra-io/jetbrains-kestra/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/kestra-io/jetbrains-kestra/commits/v0.1.0
