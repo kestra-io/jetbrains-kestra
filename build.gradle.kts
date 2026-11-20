@@ -144,3 +144,9 @@ fun Test.kestraTestSettings() {
         System.getenv(name)?.let { environment(name, it) }
     }
 }
+
+// The plugin reads the signed archive by path, without depending on signPlugin: wire it to the task output so
+// `./gradlew signPlugin verifyPluginSignature` runs both in order instead of failing Gradle's validation.
+tasks.verifyPluginSignature {
+    inputArchiveFile = tasks.signPlugin.flatMap { it.signedArchiveFile }
+}
