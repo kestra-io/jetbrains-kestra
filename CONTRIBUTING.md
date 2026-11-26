@@ -96,15 +96,41 @@ Run it against a 1.x image too (`kestra/kestra:v1.3.47` for example) when changi
 
 1. Create the Kestra organization (vendor) on the [JetBrains Marketplace](https://plugins.jetbrains.com/), and add the maintainers to it.
 2. Create a Marketplace token in [your profile](https://plugins.jetbrains.com/author/me/tokens) and store it as the `PUBLISH_TOKEN` repository secret.
-3. Generate the [plugin signing](https://plugins.jetbrains.com/docs/intellij/plugin-signing.html) key and certificate:
+3. Create the [plugin signing](https://plugins.jetbrains.com/docs/intellij/plugin-signing.html) key and certificate
+   from the PGP key Kestra uses to sign its Maven Central artifacts, rather than generating a new key. It is stored in
+   Kestra's Google Cloud Secret Manager, in the secrets prefixed `sonatype`. The Marketplace expects a PEM key and an
+   X.509 certificate, not a PGP key: `gpgsm` wraps the same key in a self-signed certificate, then exports it as PEM.
+   Work in a temporary GnuPG home so the key never enters your own keyring:
 
    ```shell
-   openssl genpkey -aes-256-cbc -algorithm RSA -out private_encrypted.pem -pkeyopt rsa_keygen_bits:4096
-   openssl rsa -in private_encrypted.pem -out private.pem
-   openssl req -key private.pem -new -x509 -days 365 -out chain.crt
+   export GNUPGHOME="$(mktemp -d)"
+   gpg --import maven-central-key.asc   # the secret key from Secret Manager, asks for its passphrase
+   KEYGRIP=$(gpg --list-secret-keys --with-colons | awk -F: '/^grp/ { print $10; exit }')
+
+   # Self-signed X.509 certificate over the same key
+   cat > cert.params <<EOF
+   Key-Type: RSA
+   Key-Grip: $KEYGRIP
+   Key-Usage: sign
+   Serial: random
+   Name-DN: CN=Kestra
+   Not-After: 20291231T235959
+   EOF
+   gpgsm --batch --gen-key cert.params > chain.der
+   openssl x509 -inform DER -in chain.der -out chain.crt
+
+   # The private key as PEM, encrypted with a new password
+   gpgsm --import chain.der
+   gpgsm --armor --export-secret-key-raw CN=Kestra > raw.pem
+   openssl pkey -in raw.pem -aes-256-cbc -out private.pem   # asks for the PRIVATE_KEY_PASSWORD
+   rm raw.pem
    ```
 
-   Store the content of `chain.crt` as the `CERTIFICATE_CHAIN` secret, the content of `private.pem` as `PRIVATE_KEY`, and the password entered at the first command as `PRIVATE_KEY_PASSWORD`. Keep the files out of the repository. The certificate expires after the number of days given: renew it before then.
+   Store the content of `chain.crt` as the `CERTIFICATE_CHAIN` secret, the content of `private.pem` as `PRIVATE_KEY`,
+   and the password entered at the last command as `PRIVATE_KEY_PASSWORD`. Check them locally before pushing a tag:
+   `CERTIFICATE_CHAIN="$(cat chain.crt)" PRIVATE_KEY="$(cat private.pem)" PRIVATE_KEY_PASSWORD=… ./gradlew signPlugin verifyPluginSignature`.
+   Then delete the files and the temporary GnuPG home (`gpgconf --kill gpg-agent && rm -rf "$GNUPGHOME"`), and keep
+   them out of the repository. The certificate expires at `Not-After`: renew it before then.
 4. Build the first version with `./gradlew buildPlugin -Pversion=0.1.0` and upload it **manually** on the [Marketplace](https://plugins.jetbrains.com/plugin/add), under the Kestra organization. JetBrains reviews new plugins before they become public. Later versions are published from CI.
 
 ### Publishing a version
