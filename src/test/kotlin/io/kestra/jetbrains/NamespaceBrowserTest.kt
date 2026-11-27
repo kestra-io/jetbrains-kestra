@@ -769,7 +769,6 @@ class NamespaceBrowserTest : KestraTestCase() {
             flows["hello"] = request.body
             FakeKestra.respond(exchange, 200, "{}")
         }
-        kestra.json("PUT", "/flows/company.team/created", status = 404) { "{}" }
         kestra.handle("POST", "/flows") { exchange, request ->
             flows["created"] = request.body
             FakeKestra.respond(exchange, 200, "{}")
