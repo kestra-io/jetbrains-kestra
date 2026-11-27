@@ -97,6 +97,9 @@ class LiveKestraTest : BasePlatformTestCase() {
         // Narrowed to the Log task, not the union of every plugin ("log" is a word from the file).
         assertSameElements(items.filter { it != "log" }, "logLevel", "logToFile")
 
+        // kestra:v1.3-slim ships without the AI plugin, so there is no provider schema to narrow.
+        if (api.get("/plugins/io.kestra.plugin.ai.agent.AIAgent", tenantScoped = false).status != 200) return
+
         // Nested unions narrow too: a provider of the AI agent declares its own type.
         myFixture.configureByText("ai.yml", flow("ai", "tasks:\n  - id: a\n    type: io.kestra.plugin.ai.agent.AIAgent\n    provider:\n      type: io.kestra.plugin.ai.provider.OpenAI\n      <caret>\n"))
         myFixture.completeBasic()
