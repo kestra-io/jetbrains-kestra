@@ -40,6 +40,7 @@ class RunConfigurationTest : KestraTestCase() {
 
     fun testRunConfigurationStreamsIntoRunConsole() {
         kestra.json("POST", "/flows/validate") { "[{}]" }
+        kestra.json("GET", "/flows/company.team/hello") { "{}" }
         kestra.json("PUT", "/flows/company.team/hello") { """{"revision":7}""" }
         kestra.json("POST", "/executions/company.team/hello") { """{"id":"e1"}""" }
         kestra.sse("GET", "/executions/e1/follow") { listOf("progress" to """{"state":{"current":"SUCCESS"},"taskRunList":[{"id":"r","taskId":"greet","state":{"current":"SUCCESS"}}]}""") }
