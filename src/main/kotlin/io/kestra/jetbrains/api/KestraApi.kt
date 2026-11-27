@@ -218,8 +218,13 @@ class KestraApi : Disposable {
     // Kestra 1.3 can hang on a PUT to a missing flow (kestra-io/kestra#17620), so check it exists first.
     fun upsertFlow(namespace: String, id: String, source: String): ApiResponse {
         val path = "/flows/${KestraUrls.segment(namespace)}/${KestraUrls.segment(id)}"
-        if (get(path).status == 404) {
+        val existing = get(path, timeout = Duration.ofSeconds(10))
+        if (existing.status == 404) {
             return postYaml("/flows", source)
+        }
+        // Any other failure could still mean a missing flow, so it never falls through to the PUT.
+        if (!existing.ok) {
+            return existing
         }
         return request("PUT", path, body = BodyPublishers.ofString(source), contentType = YAML_CONTENT_TYPE)
     }
