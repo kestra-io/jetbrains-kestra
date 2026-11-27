@@ -24,7 +24,6 @@ class RunTest : KestraTestCase() {
 
     fun testRunValidatesDeploysExecutesAndStreams() {
         kestra.json("POST", "/flows/validate") { "[{}]" }
-        kestra.json("PUT", "/flows/company.team/hello", status = 404) { """{"message":"not found"}""" }
         kestra.json("POST", "/flows") { """{"revision":1}""" }
         kestra.json("POST", "/executions/company.team/hello") { """{"id":"exec1"}""" }
         kestra.sse("GET", "/executions/exec1/follow") {
@@ -40,6 +39,8 @@ class RunTest : KestraTestCase() {
 
         assertEquals(output, 0, exitCode)
         assertTrue(output, output.contains("Deployed revision 1"))
+        // A PUT to a missing flow can hang Kestra 1.3 (kestra-io/kestra#17620), so a new flow is only POSTed.
+        assertTrue(kestra.requests.none { it.method == "PUT" })
         assertTrue(output, output.contains("Execution exec1"))
         assertTrue(output, output.contains("${kestra.url}/ui/main/executions/company.team/hello/exec1"))
         assertTrue(output, output.contains("[greet] SUCCESS 1.50s"))
@@ -63,6 +64,7 @@ class RunTest : KestraTestCase() {
 
     fun testCancelledInputsDoNotStartAnExecution() {
         kestra.json("POST", "/flows/validate") { "[{}]" }
+        kestra.json("GET", "/flows/company.team/hello") { "{}" }
         kestra.json("PUT", "/flows/company.team/hello") { """{"revision":2}""" }
         val file = myFixture.configureByText("flow.yml", FLOW)
         val (output, exitCode) = run(file.virtualFile.url) { null }
@@ -73,6 +75,7 @@ class RunTest : KestraTestCase() {
 
     fun testRetriedTaskGetsADuration() {
         kestra.json("POST", "/flows/validate") { "[{}]" }
+        kestra.json("GET", "/flows/company.team/hello") { "{}" }
         kestra.json("PUT", "/flows/company.team/hello") { """{"revision":1}""" }
         kestra.json("POST", "/executions/company.team/hello") { """{"id":"exec1"}""" }
         kestra.sse("GET", "/executions/exec1/follow") {
@@ -88,6 +91,7 @@ class RunTest : KestraTestCase() {
     // The creation request is held until the test releases it, so Stop is pressed while it is in flight.
     private fun holdCreation(release: CountDownLatch) {
         kestra.json("POST", "/flows/validate") { "[{}]" }
+        kestra.json("GET", "/flows/company.team/hello") { "{}" }
         kestra.json("PUT", "/flows/company.team/hello") { """{"revision":1}""" }
         kestra.handle("POST", "/executions/company.team/hello") { exchange, _ ->
             release.await(30, TimeUnit.SECONDS)
@@ -148,6 +152,7 @@ class RunTest : KestraTestCase() {
             release.await(30, TimeUnit.SECONDS)
             runCatching { FakeKestra.respond(exchange, 200, "[{}]") }
         }
+        kestra.json("GET", "/flows/company.team/hello") { "{}" }
         kestra.json("PUT", "/flows/company.team/hello") { """{"revision":1}""" }
         val file = myFixture.configureByText("flow.yml", FLOW)
         val model = RunModel("company.team.hello")
@@ -214,6 +219,7 @@ class RunTest : KestraTestCase() {
     }
 
     fun testSaveFlowUsesTheIdOfTheEditedText() {
+        kestra.json("GET", "/flows/company.team/renamed") { "{}" }
         kestra.json("PUT", "/flows/company.team/renamed") { """{"revision":3}""" }
         val file = myFixture.configureByText("flow.yml", FLOW)
         // The document changes, the PSI is not committed: it still says "hello".

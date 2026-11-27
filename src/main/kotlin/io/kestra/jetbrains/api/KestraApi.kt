@@ -215,16 +215,13 @@ class KestraApi : Disposable {
         return if (response.ok) ValidateResult.parse(response.json()) else null
     }
 
-    // Update first, a 404 means the flow does not exist yet, so create it.
+    // Kestra 1.3 can hang on a PUT to a missing flow (kestra-io/kestra#17620), so check it exists first.
     fun upsertFlow(namespace: String, id: String, source: String): ApiResponse {
-        val updated = request(
-            "PUT", "/flows/${KestraUrls.segment(namespace)}/${KestraUrls.segment(id)}",
-            body = BodyPublishers.ofString(source), contentType = YAML_CONTENT_TYPE,
-        )
-        if (updated.status != 404) {
-            return updated
+        val path = "/flows/${KestraUrls.segment(namespace)}/${KestraUrls.segment(id)}"
+        if (get(path).status == 404) {
+            return postYaml("/flows", source)
         }
-        return postYaml("/flows", source)
+        return request("PUT", path, body = BodyPublishers.ofString(source), contentType = YAML_CONTENT_TYPE)
     }
 
     fun createExecution(namespace: String, id: String, inputs: List<FormPart>): ApiResponse {
