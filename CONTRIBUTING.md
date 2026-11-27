@@ -88,7 +88,7 @@ KESTRA_TEST_URL=http://localhost:18080 KESTRA_TEST_USERNAME=admin@kestra.io KEST
   ./gradlew test --tests 'io.kestra.jetbrains.LiveKestraTest'
 ```
 
-The `Live Kestra` workflow runs it on every PR against `v1.3-slim`, `v2.0-slim` and `develop-slim`, since some routes differ between versions. `develop` is the next Kestra line: it also runs every weekday and does not block a PR. On an Enterprise Edition instance, also set `KESTRA_TEST_TENANT` to a tenant the user belongs to: without one, requests go to the `main` tenant.
+The `Live Kestra` workflow runs it on every PR against each line in `COMPATIBLE_KESTRA_VERSION.properties` (the `-slim` image), since some routes differ between versions. Add the new line there when a Kestra minor is released. `develop` is the next Kestra line: it also runs every weekday and does not block a PR. On an Enterprise Edition instance, also set `KESTRA_TEST_TENANT` to a tenant the user belongs to: without one, requests go to the `main` tenant.
 
 ## Release
 
