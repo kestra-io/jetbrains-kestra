@@ -22,6 +22,18 @@ class RunTest : KestraTestCase() {
     private fun execution(state: String, taskState: String) =
         """{"id":"exec1","state":{"current":"$state"},"taskRunList":[{"id":"tr1","taskId":"greet","state":{"current":"$taskState","histories":[{"date":"2026-11-16T10:00:00Z"},{"date":"2026-11-16T10:00:01.5Z"}]}}]}"""
 
+    fun testFailedExistenceCheckNeverPutsTheFlow() {
+        kestra.json("POST", "/flows/validate") { "[{}]" }
+        kestra.json("GET", "/flows/company.team/hello", status = 503) { """{"message":"unavailable"}""" }
+
+        val file = myFixture.configureByText("flow.yml", FLOW)
+        val (output, exitCode) = run(file.virtualFile.url) { listOf(FormPart.Text("user", "Ana")) }
+
+        assertEquals(output, 1, exitCode)
+        assertTrue(output, output.contains("503"))
+        assertTrue(kestra.requests.none { it.method == "PUT" || (it.method == "POST" && it.path.endsWith("/flows")) })
+    }
+
     fun testRunValidatesDeploysExecutesAndStreams() {
         kestra.json("POST", "/flows/validate") { "[{}]" }
         kestra.json("POST", "/flows") { """{"revision":1}""" }
